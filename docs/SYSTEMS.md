@@ -1,6 +1,6 @@
 # dispatcher: systems
 
-The architecture as intended: where the service runs, how a delivery becomes a run, and how it is checked. The behaviour is in [PRODUCT.md](PRODUCT.md); the decisions and what they rejected are in [adrs/000-record-architecture-decisions.md](adrs/000-record-architecture-decisions.md) and the records beside it. Nothing here is built yet — the tree carries the first three decisions and no code — so no claim below is machine-checked.
+The behaviour this serves is in [PRODUCT.md](PRODUCT.md) and the decisions in [adrs/](adrs/). Nothing described here is built yet.
 
 ## Where it runs
 
@@ -66,6 +66,6 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 ## Checks
 
-- The tree carries no code, so nothing is machine-checked yet.
+- Nothing is machine-checked yet.
 - When it does, the gate is `gofmt -l .`, `go vet ./...` and `go test ./...`, run on every pull request and on `main`.
 - The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the runner's start and its tracking, and one signed POST driven end to end. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.

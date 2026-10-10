@@ -1,0 +1,71 @@
+# dispatcher: systems
+
+The architecture as intended: where the service runs, how a delivery becomes a run, and how it is checked. The behaviour is in [PRODUCT.md](PRODUCT.md); the decisions and what they rejected are in [adrs/000-record-architecture-decisions.md](adrs/000-record-architecture-decisions.md) and the records beside it. Nothing here is built yet — the tree carries the first three decisions and no code — so no claim below is machine-checked.
+
+## Where it runs
+
+- One long-running process on the operator's host, beside the Hermes home, as a systemd user unit that restarts on failure. It is up whenever the host is, and GitHub is its only inbound client.
+- It binds loopback only: `127.0.0.1:8645`, serving `POST /github`. TLS terminates at a reverse proxy in front of it, which is what gives GitHub a public path; the host's name, the public URL and the certificate are recorded here when the deployment card builds that proxy, and today none exists. Both the port and the path are provisional until then.
+- The parts, none of them on disk yet: a **receiver** that verifies and deduplicates a delivery, a **board** that reads and writes GitHub, a **router** that turns a delivery into one decision, a **runner** that starts and tracks an agent's run, a **config** loader, and an **audit** writer. `cmd/dispatcher` boots them.
+
+## The request path
+
+1. GitHub posts to the public URL, and the proxy forwards it to the loopback port.
+2. The receiver reads the raw body up to the body limit, then verifies `X-Hub-Signature-256` against the route's secret. Nothing is parsed before this passes.
+3. It takes the event and the delivery id from the headers, and the repository and the action from the parsed body.
+4. The repository and the event must be on the allowlist. Anything else is answered `202` and dropped.
+5. The delivery id is checked against the cache. A delivery already seen is answered `202` and starts nothing.
+6. The router decides from the payload, and reads the board only where the payload is silent — a card's column, or its assignee.
+7. Where the rule assigns a card, the write happens before the run: the assignee is written, and a write that fails fails the delivery.
+8. The runner starts the target agent's run with the reason. One delivery starts an agent at most once.
+9. One audit line is appended whatever happened: the ids, the decision, the assignee it wrote, the run it started, and the answer the sender was given.
+
+The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The response codes match the gateway's own set so one mental model covers both hops: `202` acted on or ignored, `400` a body that is not the JSON the signature covered, `401` a missing or non-verifying signature, `404` a path served by nobody, `413` the body limit, `429` the inbound rate limit, `503` no capacity.
+
+## The board
+
+- The board is one GitHub project in the organisation; a card is an issue, and its column is the project's `Status` field. PRODUCT.md names the four columns and which agent moves a card out of each.
+- Reading the board is the GraphQL project-items query, one page at a time; reading one card is the REST issue endpoint. Both use the board token, built once at boot.
+- The write is one field: the assignee of the card the rule names. It is the issue's assignee, which is the field the project shows. The service moves no card, writes no comment and closes nothing.
+- A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused, and GitHub sends it again.
+
+## Starting a run
+
+- **The requirement**: start one bounded run of the named agent's own profile, hand it the reason, and know while it is running.
+- **The mechanism**: the runner launches that profile's agent as a child process of the service — the Hermes CLI on the profile, `hermes --profile <bot> chat -q "<reason>"` — and tracks the child: running, exited, its exit code and its last output. The run is the profile's own: its prompt, skills, memory and delivery come from the profile, and the dispatcher adds only the reason.
+- **One run per agent**: the runner starts no second run for a profile that already has one, and the board's `Started` column is what it reconciles against after a restart.
+- **The fallback**: where a profile's gateway must own the run and its delivery, the same wake is a signed POST to that profile's route on the gateway — `/webhooks/<route>`, or `/p/<profile>/webhooks/<route>` where the gateway multiplexes profiles — with the same `X-Hub-Signature-256` form GitHub uses. The run's lifetime is then the gateway's, and the service tracks it through the board rather than through a child process.
+- The reason is the run's input and nothing else; the agent re-reads the board and the pull request. That is what makes a wake that is early, late or duplicated harmless.
+
+## GitHub access
+
+- **One organisation webhook**, not one per repository, covers a new repository with no second setup step and needs an organisation owner to create. It subscribes to the events PRODUCT.md acts on, and the allowlist makes that safe.
+- **One token** reads the project and the issues and writes the assignee. Reading the project's items needs `read:project`; the write needs write access to issues. Read-mostly, one field written.
+- The webhook is the trigger; the API answers what a payload does not carry. A decision the payload can answer never spends a call.
+
+## Configuration and secrets
+
+- The config file is committed to this repository and holds no secret: the listen address, the allowlist of repositories and events, the project, each agent's profile and GitHub login, and the *name* of each secret. It is committed because it is behaviour, and its diff is reviewed like any other.
+- Secret values live outside it: an environment file the unit loads, or a file with mode `600` owned by the service user. The config names the variable or the path, and a reference that resolves to nothing stops the process at boot rather than at the first event.
+- Nothing secret is logged, ever — not the value, not a prefix, not a hash of it. No payload body is logged either: an audit line carries identifiers, and a payload can hold anything a third party wrote.
+
+## Storage
+
+- **No database.** The board is the durable state; the service holds no source of truth of its own.
+- In memory: the delivery-id cache, with a one-hour TTL, and the runs in flight. A restart forgets both.
+- On disk: the audit log, one JSON Lines line per delivery in arrival order, size-rotated; and the dead-letter file for a delivery or a run that failed. The service appends to both and rewrites neither.
+- The restart cost is named rather than hidden: a redelivery inside the lost hour can start one extra run, and the board — a card in `Started` — is what the runner reconciles its picture from.
+
+## Failure modes
+
+- **A duplicate delivery** is answered from the cache; **an out-of-order one** is unaffected, because nothing orders events and every wake is a reason to re-read.
+- **A restart** loses the cache and the runs in flight, not the audit log; the board is re-read.
+- **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason; GitHub redelivers.
+- **A wrong signature, an oversized body, an event that is not ours** — `401`, `413`, `202`, as PRODUCT.md's edge cases say.
+- **GitHub unreachable** — the board read fails and the delivery is refused rather than answered done; the service keeps no queue of its own and invents no ordering.
+
+## Checks
+
+- The tree carries no code, so nothing is machine-checked yet.
+- When it does, the gate is `gofmt -l .`, `go vet ./...` and `go test ./...`, run on every pull request and on `main`.
+- The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the runner's start and its tracking, and one signed POST driven end to end. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.

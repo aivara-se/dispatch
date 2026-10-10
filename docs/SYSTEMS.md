@@ -3,9 +3,9 @@
 ## Where it runs
 
 - One long-running process on the operator's host, beside the Hermes home, as a systemd user unit that restarts on failure. It is up whenever the host is, and GitHub is its only inbound client.
-- Written in **Go**, standard library only: `net/http` serves the receiver and makes the outbound calls, `crypto/hmac` and `crypto/subtle` verify the signature, and `encoding/json` parses what the verifier has signed off. The single module beyond the standard library is `gopkg.in/yaml.v3`, which reads the YAML config file. The language floor is Go 1.26, and what is built is one static binary, `cmd/dispatcher`, with no runtime to install on the host.
+- Written in **Go** and built as one static binary, `cmd/dispatcher`, with no runtime to install on the host.
 - It binds loopback only: `127.0.0.1:8645`, serving `POST /github`. **Caddy** is the reverse proxy in front of it and the only thing on the host that faces the network: it terminates TLS, obtaining and renewing the certificate itself, which is what gives GitHub a public path to post to. Caddy's own site block, the host name and the certificate are recorded here when the deployment lands; the port and the path are provisional until then.
-- The parts, packages under `internal/`: a **receiver** that verifies and deduplicates a delivery, a **board** that reads and writes GitHub, a **router** that turns a delivery into one decision, a **runner** that starts and tracks an agent's run, a **config** loader, and an **audit** writer. `cmd/dispatcher` is the binary that boots them.
+- The parts: a **receiver** that verifies and deduplicates a delivery, a **board** that reads and writes GitHub, a **router** that turns a delivery into one decision, a **runner** that starts and tracks an agent's run, a **config** loader, and an **audit** writer. `cmd/dispatcher` is the binary that boots them.
 
 ## The request path
 

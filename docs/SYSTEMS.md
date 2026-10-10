@@ -1,12 +1,10 @@
 # dispatcher: systems
 
-The behaviour this serves is in [PRODUCT.md](PRODUCT.md) and the decisions in [adrs/](adrs/). Nothing described here is built yet.
-
 ## Where it runs
 
 - One long-running process on the operator's host, beside the Hermes home, as a systemd user unit that restarts on failure. It is up whenever the host is, and GitHub is its only inbound client.
-- It binds loopback only: `127.0.0.1:8645`, serving `POST /github`. TLS terminates at a reverse proxy in front of it, which is what gives GitHub a public path; the host's name, the public URL and the certificate are recorded here when the deployment card builds that proxy, and today none exists. Both the port and the path are provisional until then.
-- The parts, none of them on disk yet: a **receiver** that verifies and deduplicates a delivery, a **board** that reads and writes GitHub, a **router** that turns a delivery into one decision, a **runner** that starts and tracks an agent's run, a **config** loader, and an **audit** writer. `cmd/dispatcher` boots them.
+- It binds loopback only: `127.0.0.1:8645`, serving `POST /github`. TLS terminates at a reverse proxy in front of it, which is what gives GitHub a public path; the host's name, the public URL and the certificate are recorded here when the deployment builds that proxy. The port and the path are provisional until then.
+- The parts: a **receiver** that verifies and deduplicates a delivery, a **board** that reads and writes GitHub, a **router** that turns a delivery into one decision, a **runner** that starts and tracks an agent's run, a **config** loader, and an **audit** writer. `cmd/dispatcher` boots them.
 
 ## The request path
 
@@ -24,7 +22,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 ## The board
 
-- The board is one GitHub project in the organisation; a card is an issue, and its column is the project's `Status` field. PRODUCT.md names the four columns and which agent moves a card out of each.
+- The board is one GitHub project in the organisation; a card is an issue, and its column is the project's `Status` field.
 - Reading the board is the GraphQL project-items query, one page at a time; reading one card is the REST issue endpoint. Both use the board token, built once at boot.
 - The write is one field: the assignee of the card the rule names. It is the issue's assignee, which is the field the project shows. The service moves no card, writes no comment and closes nothing.
 - A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused, and GitHub sends it again.
@@ -39,7 +37,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 ## GitHub access
 
-- **One organisation webhook**, not one per repository, covers a new repository with no second setup step and needs an organisation owner to create. It subscribes to the events PRODUCT.md acts on, and the allowlist makes that safe.
+- **One organisation webhook**, not one per repository, covers a new repository with no second setup step and needs an organisation owner to create. It subscribes to every event the service acts on, and the allowlist makes that safe.
 - **One token** reads the project and the issues and writes the assignee. Reading the project's items needs `read:project`; the write needs write access to issues. Read-mostly, one field written.
 - The webhook is the trigger; the API answers what a payload does not carry. A decision the payload can answer never spends a call.
 
@@ -61,11 +59,10 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - **A duplicate delivery** is answered from the cache; **an out-of-order one** is unaffected, because nothing orders events and every wake is a reason to re-read.
 - **A restart** loses the cache and the runs in flight, not the audit log; the board is re-read.
 - **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason; GitHub redelivers.
-- **A wrong signature, an oversized body, an event that is not ours** — `401`, `413`, `202`, as PRODUCT.md's edge cases say.
+- **A wrong signature or an oversized body** is refused before anything is parsed, and **an event that is not ours** is answered `202` and dropped.
 - **GitHub unreachable** — the board read fails and the delivery is refused rather than answered done; the service keeps no queue of its own and invents no ordering.
 
 ## Checks
 
-- Nothing is machine-checked yet.
-- When it does, the gate is `gofmt -l .`, `go vet ./...` and `go test ./...`, run on every pull request and on `main`.
+- The gate, on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...`.
 - The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the runner's start and its tracking, and one signed POST driven end to end. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.

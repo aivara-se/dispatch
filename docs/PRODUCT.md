@@ -20,7 +20,7 @@ A card is a GitHub issue. The board is the source of truth: the service reads it
 - **MaMa** refines. She checks the card is feasible, fills in what is missing, splits it into sub-cards when it is too big, links the cards that block it, and moves it to `Refined` when it is ready. A blocked card stays in `Backlog`.
 - **MeMe and MiMi** build, one card at a time, to a merged pull request.
 - **Every agent reviews.** A review is not a card and never takes a developer's one slot. An agent reviews a peer's pull request and never pushes to it: the author applies every change.
-- **MoMo** is not in this flow. Each agent tests its own change, and the two developers review each other's; a separate quality step is later work.
+- **MoMo** attacks, and holds no card. The service never assigns one to MoMo: a `Refined` card is only ever assigned to MeMe or MiMi, and MoMo writes no product code. MoMo is woken by the facts any reviewer is — a review requested from MoMo, or a comment, a review or a label landing on a pull request MoMo is on — and the review is adversarial: the untrusted input, the unhandled case, the failure path, and the gap between what a change claims and what its diff does. The subject is the code around the diff, not the diff alone. A finding comes with the attempt that produced it, a test that reproduces one is handed over, and the author applies every change, as for any review.
 
 ## What the dispatcher does
 
@@ -71,7 +71,7 @@ v1 is done when each of these holds, and each is checkable by the operator.
 
 - One card added to `Backlog`, and nothing else touched, reaches a merged pull request: MaMa refines it, a developer builds it, a peer reviews it, and the service carries every wake on the way.
 - A card added to `Backlog` is assigned to MaMa and her run starts within seconds of the event (provisional; the first live delivery freezes the number).
-- A card moved to `Refined` is assigned to one developer that holds no card, and no card is assigned to two.
+- A card moved to `Refined` is assigned to one of the two developers, the one that holds no card, and no card is assigned to two.
 - A card moved to `Finished` starts MaMa's run and no other.
 - A review request starts the named reviewer alone, and a merge starts the author alone.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.

@@ -19,12 +19,12 @@
 8. The runner starts the target agent's run with the reason. One delivery starts an agent at most once.
 9. One audit line is appended whatever happened: the ids, the decision, the assignee it wrote, the run it started, and the answer the sender was given.
 
-The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`), and a `2xx` is what GitHub wants: `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit; `502` the call or the run the delivery needed failed.
+The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`): `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit; `502` the call or the run the delivery needed failed.
 
 ## The board
 
 - The board is one GitHub project in the organisation; a card is an issue, and its column is the project's `Status` field.
-- Reading the board is GitHub's GraphQL API — the project-items query, one page at a time — and a card's column is read there, because the REST issue endpoint carries no project field; reading one card for its assignee is that issue endpoint. Both use the board token, built once at boot.
+- Reading the board is GitHub's GraphQL API — the project-items query, one page at a time — and a card's column comes from it; reading one card for its assignee is that issue endpoint. Both use the board token, built once at boot.
 - The write is one field: the assignee of the card the rule names. It is the issue's assignee, which is the field the project shows. The service moves no card, writes no comment and closes nothing.
 - A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused with a `5xx`, and it is a person's to re-dispatch, not the sender's (*Failure modes*).
 

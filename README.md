@@ -23,7 +23,7 @@ go vet ./...
 go test ./...
 ```
 
-They run on every pull request and on `main` once `.github/workflows/checks.yml` lands. Until the packages exist, `go vet ./...` and `go test ./...` report "matched no packages" and there is nothing to check.
+Until the packages exist, `go vet ./...` and `go test ./...` exit 1 with `no packages to vet` and `no packages to test`; `go build ./...` is the pass this module has today.
 
 ## Documentation
 

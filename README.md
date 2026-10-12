@@ -6,7 +6,7 @@ The service that reads GitHub's deliveries for the `aivara-se` organisation and 
 
 ## Run it locally
 
-Nothing runs yet: `cmd/dispatcher` is not written. From the repository root, once it is:
+From the repository root, once `cmd/dispatcher` is written:
 
 ```sh
 go build ./cmd/dispatcher     # ./dispatcher, in the repository root

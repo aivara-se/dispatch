@@ -2,11 +2,11 @@
 
 ## Context
 
-Every record beside this one rests on behaviour of a program outside this tree: GitHub's webhook semantics, the Hermes CLI, the gateway's routes, signatures, answers and cache. No test here covers them, and `SYSTEMS.md` (*Checks*) says so: those are checked by hand on the host. Two of this change's four records rested on such a claim that was wrong, and not one of the four said where its claims had been read. A hand-check that does not name what it checked is re-derived from memory the next time the claim is touched, which is how the two stayed wrong, and it is why one of them was reused as the reason for a choice it did not support.
+Every record beside this one rests on behaviour of a program outside this tree: GitHub's webhook semantics, the Hermes CLI, the gateway's routes, signatures, answers and cache. No test here covers them, and `SYSTEMS.md` (*Checks*) says so: those are checked by hand on the host. A hand-check that does not name what it checked is re-derived from memory the next time the claim is touched — which is how a claim stays wrong, and how a wrong one is reused as the reason for a choice it cannot support.
 
 ## Decision
 
-Where a record rests on the behaviour of something outside this repository, it names what was read — the file and the repository, or the document, and the date — in the sentence that makes the claim. Where the claim's home is a document rather than a record, the document carries the source and the record names the home. The check is repeated before the code that depends on the claim lands, and the name is what makes the repeat possible.
+Where a record or a document in this repository rests on the behaviour of something outside it, the claim names what was read — the file and the repository, or the document, and the date — in the sentence that makes the claim. Where one file is the home of a fact, that file carries the source and everything else names the home. The check is repeated before the code that depends on the claim lands, and the name is what makes the repeat possible.
 
 ## Consequences
 

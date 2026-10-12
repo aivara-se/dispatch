@@ -16,7 +16,7 @@ Nothing else is added, for the configuration or for its example: no YAML, no TOM
 
 - Zero dependencies, which is `001`'s rule needing no exception.
 - No comments and no trailing commas, so a hand-edited configuration is slightly less pleasant than YAML. Whoever edits it pays that, and the reviewer reads the diff either way.
-- JSON is strict about what it accepts and silent about what it does not know: an unknown field parses cleanly and is dropped. Whether the loader refuses one is the loader's decision and its tests', not this record's.
+- JSON is strict about what it accepts and silent about what it does not know: an unknown field parses cleanly and is dropped. The loader refuses it instead — the decoder can be told to, and a committed configuration with a typo in it should stop the process at boot rather than be read as a smaller configuration than it is.
 - A secret stays a name either way: the format holds no value, so the lack of comments pushes nobody towards writing one down.
 
 ## Rejected
@@ -25,4 +25,3 @@ Nothing else is added, for the configuration or for its example: no YAML, no TOM
 - **TOML.** Also one dependency, and its advantage over JSON is comments, which the reviewer of a diff supplies for free.
 - **Configuration as Go source** — a package of literals, compiled in. Rejected: the configuration is behaviour that changes per deployment, so a change would become a rebuild and a redeploy rather than an edit and a restart.
 - **Environment variables only.** Rejected: no diff to review, no one file that says what the service's whole configuration is, and the allowlist and the agent table scattered through a unit file.
-- **Two formats**, YAML for the human and JSON for the service. Rejected: two parsers and two versions of one document, which is how the pair drifts.

@@ -24,11 +24,11 @@ A card is a GitHub issue and its column is the project's `Status` field. The boa
 
 ## The rule
 
-One question, asked of every card every time the service looks: **what moves this card forward, who does it, and is it already happening?** Where the answer is an agent and nothing is in flight for it, the service writes the assignee and starts that agent's run.
+One question, asked of every card every time the service looks: **what moves this card forward, who does it, and is it already happening?** Where the answer is an agent, the service writes the assignee and starts that agent's run — unless a run for that action is in flight, or the action has already been started since the card last changed. An action whose wake never started a run is not a wake at all, and is repeated at the next look.
 
 - **`Backlog`** — MaMa refines it; she reads the links between cards and decides what is blocked.
 - **`Refined`** — a developer holding no card builds it. With none free, the card waits and is looked at again when a run ends.
-- **`Started`** — nothing while its run is in flight. With no run, its assignee, to finish or restart it.
+- **`Started`** — nothing while its run is in flight. With no run started for it, its assignee, to finish or restart it.
 - **A review requested on a pull request** — the named reviewer.
 - **Changes requested on a pull request** — its author.
 - **A pull request approved and mergeable** — the merge is the operator's. *How the service reaches the operator is not decided.*
@@ -62,7 +62,7 @@ v1 is done when each of these holds, and each is checkable by the operator.
 - One card added to `Backlog`, and nothing else touched, reaches a merged pull request, and the service carries every wake on the way.
 - A card already `Refined` when the service boots reaches a developer with no delivery required.
 - A card added to `Backlog` is assigned to MaMa and her run starts within seconds (provisional; the first live delivery freezes the number).
-- A card in `Started` with no run behind it is woken once per change and not at every look: a run that ended without moving its card is its agent's to move.
+- A card in `Started` whose wake never started a run is woken again at the next look; one whose run ended without moving it is left to its agent.
 - A review request wakes the named reviewer; a merge wakes MaMa; no agent is woken for the delivery it made. One look may wake more than one agent, because a look answers for every card it reads — and a card an agent opened is still a card, so a look wakes its assignee for it like any other.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - A run the service could not start is dead-lettered rather than dropped.

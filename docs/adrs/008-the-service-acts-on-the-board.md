@@ -17,6 +17,7 @@ Running the flow by hand for a day showed what an event table cannot do. Thirty-
 
 ## Consequences
 
+- The bound costs a card's patience. An agent that has been given a card and has not moved it is not woken again for it, so a card can wait on its agent's judgement for as long as that agent chooses; the service's answer is that the agent holds it, and the operator's is the board.
 - A card that sits still is a card the service has an answer for. That is what makes a card predating the service, a card an agent created for itself, and a card whose wake was dropped, reachable at all.
 - Two new triggers cost one board read each. The full project read is the service's expensive call, so it happens on those three moments and never on a payload's say-so alone.
 - The run table and the per-card record are memory, so a restart forgets which runs were in flight and which cards it had already woken. The boot pass rebuilds the run table from `Started` and starts one run per agent for the cards it finds unsettled — one run per agent is the runner's rule, so a pass that finds twenty-eight unsettled cards for one agent starts one run, not twenty-eight; the agent re-reads the board when it runs, which is what keeps the extra run harmless.

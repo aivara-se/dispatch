@@ -48,7 +48,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 - **One organisation webhook**, not one per repository, covers a new repository with no second setup step; an organisation webhook is organisation-owner administration, so the operator creates it (observed on the live organisation, 2026-10-12). It subscribes to every event the service acts on, and the allowlist makes that safe.
 - **One token** reads the project and the issues and writes the assignee, with the scopes `ADR 005` fixes. Read-mostly, one field written.
-- The webhook is the trigger; the API answers what a payload does not carry. A look reads the board in full, so a delivery pays one paged project read like any other look; what the payload saves is the per-card reads a decision would otherwise need.
+- The webhook is the trigger; the API answers what a payload does not carry. The payload says what changed, so no look diffs two board reads to find it; a look reads the project in full, and the saving is that diff rather than a call.
 
 ## Configuration and secrets
 

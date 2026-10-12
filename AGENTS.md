@@ -34,7 +34,7 @@ go test ./...
 
 Run the whole sequence, not just its fast part, and read every result — the exit code of the last command says nothing about the first.
 
-These three are the gate `docs/SYSTEMS.md` (*Checks*) fixes, and CI (`.github/workflows/checks.yml`) runs them on every pull request and on `main`. **Until the module lands and the gate with it, there is no code to check** — the documents are the current work, and a check that pretended to verify them would be a placeholder. Until then a reviewer covers what no machine can see: that every relative link in a document resolves to a file in the tree, that no unfilled slot survives, and that each ADR's Consequences says what its choice costs and not only what it buys.
+These three are the gate `docs/SYSTEMS.md` (*Checks*) fixes, and CI (`.github/workflows/checks.yml`) runs them. **Until the packages exist there is no code to check** — `README.md` (*Checks*) states what this module prints today, and the documents are the current work; a check that pretended to verify them would be a placeholder. Until then a reviewer covers what no machine can see: that every relative link in a document resolves to a file in the tree, that no unfilled slot survives, and that each ADR's Consequences says what its choice costs and not only what it buys.
 
 ## Version Control
 

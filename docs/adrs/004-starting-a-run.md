@@ -14,7 +14,7 @@
 
 ## Consequences
 
-- The service owns a process tree it did not write: it reaps the child, bounds its lifetime, and decides what a signal means for it. A run is a resource, and a run that dies is an exit code rather than silence.
+- The service owns a process tree it did not write: it reaps the child, bounds its lifetime (provisional: thirty minutes, which the first live run freezes), and decides what a signal means for it. A run is a resource, and a run that dies is an exit code rather than silence.
 - *Started* and *still running* are facts the service holds rather than infers, so one run per agent can be enforced while the service is up. What no child process shows is the run's content: the agent's own delivery carries that through the gateway, so the audit log records that a run started and never what became of it.
 - The command line is a contract with another program: the global `--profile`/`-p` and the `chat -q` subcommand option are the Hermes CLI's, and a `-q` invocation on non-TTY stdio answers and exits, which is what a child process gets (Hermes Agent, *CLI Commands Reference*, read 2026-10-12). A Hermes upgrade can change it, and nothing in this repository's tests covers it; it is checked by hand on the host.
 - The fallback costs a secret, a route and a signature per profile, and it gives up the exit code: liveness becomes an inference from the run table, so a gateway-owned run that dies is noticed late — by its card not moving — rather than by the runner.
@@ -26,4 +26,4 @@
 - **The agent in-process**, linking the Hermes runtime into the service. Rejected: the agent is a separate program with its own lifetime, credentials and delivery, and a crashing service would take its runs with it — the opposite of a board that outlives the service.
 - **The gateway as the only mechanism.** Rejected: it makes every profile's gateway a prerequisite, and the loopback child is what lets one host wake a profile that has none.
 - **A wake that carries the task** — the whole instruction rather than the reason. Rejected: a late, repeated or out-of-order delivery would then do the work twice or in the wrong order, and a card edited after the wake would disagree with the instruction that woke it.
-- **A queue or a job runner** — a `systemd --user` unit or a scheduler per run. Rejected: a second source of truth about what is running, where the board's `Started` column already is one.
+- **A queue or a job runner** — a `systemd --user` unit or a scheduler per run. Rejected: a second source of truth about what is running, where the run table already is one ([008](008-the-service-acts-on-the-board.md)).

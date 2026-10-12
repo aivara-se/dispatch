@@ -17,7 +17,7 @@
 6. The router works out which agents the fact concerns, and reads the board for the state the delivery cannot state: a card's column, its assignee, and whether a run is in flight.
 7. Where the rule assigns a card, the write happens before the run: the assignee is written, and a write that fails fails the delivery.
 8. The runner starts the target agent's run with the reason, and records the run — its profile, the card it concerns, and the session id it started.
-9. One audit line is appended whatever happened: the ids, the decision, the assignee it wrote, the run and its session id, and the answer the sender was given.
+9. One audit line is appended whatever happened: the trigger — a delivery, a run ending, or boot — the ids, the decision, the assignee it wrote, the run and its session id, and the answer the sender was given.
 
 The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`): `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit, whose limit, window and order against the audit append are `ADR 006`'s; `502` the call or the run the delivery needed failed.
 
@@ -58,8 +58,8 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 ## Storage
 
 - **No database.** The board is the durable state; the service holds no source of truth of its own.
-- In memory: the delivery-id cache, with a one-hour TTL, and the run table. A restart forgets both, and the pass at boot rebuilds what it can (`ADR 008`).
-- On disk: the audit log, one JSON Lines line per delivery in arrival order, size-rotated; and the dead-letter file for a delivery or a run that failed. The service appends to both and rewrites neither.
+- In memory: the delivery-id cache, with a one-hour TTL, and the run table.
+- On disk: the audit log, one JSON Lines line per trigger of a look — a delivery, a run ending, or boot — in arrival order, size-rotated; and the dead-letter file for a delivery or a run that failed. The service appends to both and rewrites neither.
 
 ## Failure modes
 

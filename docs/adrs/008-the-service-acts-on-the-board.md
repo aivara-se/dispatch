@@ -13,7 +13,7 @@ Running the flow by hand for a day showed what an event table cannot do. Thirty-
 - **The question is per card, not per event**: what moves this card forward, who does it, and is it already happening. `PRODUCT.md` (*The rule*) is that list.
 - **It looks at three moments**: a delivery arrives, a run it started ends, and once at boot. Nothing else fires it — there is still no clock.
 - **"Is it already happening" is the service's own run table**, held in memory and rebuilt at boot from the cards in `Started` and the processes it finds. The board is the durable state, but it is not the record of a run.
-- **The pass is idempotent and writes one field.** A card whose next action is already satisfied writes nothing and starts nothing.
+- **The pass writes one field and does not repeat a wake.** It remembers, per card, the next action it last started a run for: the same action is not started twice for an unchanged card, and is started again when the card changed, or when the earlier run never started — which is the dropped wake the pass exists for.
 
 ## Consequences
 

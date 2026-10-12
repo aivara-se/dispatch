@@ -26,7 +26,7 @@ A card is a GitHub issue and its column is the project's `Status` field. The boa
 
 One question, asked of every card every time the service looks: **what moves this card forward, who does it, and is it already happening?** Where the answer is an agent and nothing is in flight for it, the service writes the assignee and starts that agent's run.
 
-- **`Backlog`** — MaMa refines it. A card whose blockers are open waits.
+- **`Backlog`** — MaMa refines it; she reads the links between cards and decides what is blocked.
 - **`Refined`** — a developer holding no card builds it. With none free, the card waits and is looked at again when a run ends.
 - **`Started`** — nothing while its run is in flight. With no run, its assignee, to finish or restart it.
 - **A review requested on a pull request** — the named reviewer.
@@ -63,7 +63,7 @@ v1 is done when each of these holds, and each is checkable by the operator.
 - A card already `Refined` when the service boots reaches a developer with no delivery required.
 - A card added to `Backlog` is assigned to MaMa and her run starts within seconds (provisional; the first live delivery freezes the number).
 - No card sits in `Started` with no run behind it: a run that ended without its card moving is looked at again.
-- A review request starts the named reviewer alone; a merge starts MaMa alone; no agent is started for its own action.
+- A review request wakes the named reviewer; a merge wakes MaMa; no agent is woken for its own action. One look may wake more than one agent, because a look answers for every card it reads.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - A run the service could not start is dead-lettered rather than dropped.
 - The audit log answers, for any delivery, whether an agent was started and, when not, why — and, for any card, what its runs cost.

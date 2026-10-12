@@ -2,10 +2,6 @@
 
 A Go service that receives GitHub's deliveries for the `aivara-se` organisation and wakes the one agent the fact concerns, with the reason — built for the operator of a small fleet of agents.
 
-The design is in `docs/`: `docs/PRODUCT.md` is what the service is for and how it is judged, `docs/SYSTEMS.md` is the architecture and its interfaces, and `docs/adrs/` holds the decisions and what each rejected. The service is one static binary, `cmd/dispatcher`, in six parts: a receiver that verifies and deduplicates a delivery, a board that reads the project and writes the assignee, a router that turns a delivery into one decision, a runner that starts one agent's run, a config loader, and an audit writer.
-
-This file is the `aivara-se` agent convention, version `2`, adopted from `aivara-se/.agents` at `508b1540388ebc17374255f01eda39f367c76645`. Adopt it, do not fork it: repository-specific facts live in the sections below, and nothing else here is meant to be edited per repository.
-
 ## Current Project Focus
 
 The design is settled and the code has not started. Land the foundation first — `cmd/dispatcher`, the config, the audit log, the frozen package interfaces and the gate — then write the receiver, the board, the router and the runner in parallel: each owns one package and edits nothing of the foundation.

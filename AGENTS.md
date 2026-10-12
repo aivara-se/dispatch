@@ -51,6 +51,7 @@ These three are the gate `docs/SYSTEMS.md` (*Checks*) fixes, and CI (`.github/wo
 - `docs/SYSTEMS.md`: the architecture — where it runs, the request path, and the interfaces
 - `docs/adrs/`: one decision per file; merged into `main` means Accepted
 - `AGENTS.md`: the entry file an agent reads first
-- Once the foundation lands: `README.md` (how it builds and runs, and where the documents are), `go.mod`, `cmd/dispatcher/` (the binary), `internal/{receiver,board,router,runner}/` (the four parts), `internal/{config,audit}/` (what it loads and what it writes), and `.github/workflows/checks.yml` (CI)
+- `README.md` (how it builds and runs, and where the documents are), `go.mod`, `.gitignore`
+- Once the foundation's code lands: `cmd/dispatcher/` (the binary), `internal/{receiver,board,router,runner}/` (the four parts), `internal/{config,audit}/` (what it loads and what it writes), and `.github/workflows/checks.yml` (CI)
 
 New markdown goes in the directory that already owns its subject, and a fact has exactly one home. Never add a second copy of something a document already says; link to it. If a path in the map above stops being true, fix the map in the same pull request. A map that lies is worse than no map.

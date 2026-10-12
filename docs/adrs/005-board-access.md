@@ -6,7 +6,7 @@
 
 ## Decision
 
-- **A column is a project field, never an issue field.** The REST issue endpoint carries none (*Issues*, GitHub REST, docs.github.com, read 2026-10-12), so a `Status` read from it is necessarily an empty answer — the failure this record exists to prevent. The column is read with GraphQL's project-items query, one page at a time, with the `Status` field by name: for the whole board, where a decision turns on which developer holds a card, and for one card.
+- **A column is a project field, never an issue field.** The REST issue endpoint carries none (*Issues*, GitHub REST, docs.github.com, read 2026-10-12), so a `Status` read from it is necessarily an empty answer — the failure this record exists to prevent. The column is read with GraphQL's project-items query, one page at a time, with the `Status` field by name, for the whole board — which is what a decision that turns on who holds a card needs.
 - **The payload names the change; the board names the state.** A `projects_v2_item` event carries the field that changed — `changes.field_value`, with `field_name`, `from` and `to` (*GraphQL and webhook support for project status updates and more!*, GitHub changelog, 2024-06-27, read 2026-10-12) — so the payload says a card's `Status` moved, and where to. What it does not say is where the card is when the delivery is acted on: GitHub delivers out of order (*Troubleshooting webhooks*, *Webhooks deliveries are out of order*, docs.github.com, read 2026-10-12), and this service never orders events, so the payload's copy is a move behind the moment the card moves again. The column a decision turns on is the one the board reports at the read.
 - **One card is read with the REST issue endpoint**: its assignee. The endpoint answers an issue and a pull request alike (*Issues*, GitHub REST, docs.github.com, read 2026-10-12), which a project read cannot — GraphQL's `issue()` field refuses a pull request's number with `NOT_FOUND` and no node (checked against the live board, 2026-10-12; the GraphQL reference does not state it).
 - **One token**, built once at boot: `read:project` for the board, and write access to issues for the assignee. The minimum that does the job, and the only credential the service holds.
@@ -15,10 +15,9 @@
 
 ## Consequences
 
-- The payload first. A decision the payload can answer — which event, which card, which action — saves the per-card read that would name it, though every look pays the project read ([008](008-the-service-acts-on-the-board.md)).
+- The payload names what changed and the action it concerns; the board answers the column and the assignee. Every look reads the project in full ([008](008-the-service-acts-on-the-board.md)), so the payload's saving is the search it removes rather than a call — and the column still comes from the board, because a delivery's copy is a move old by the time it is acted on.
 - Two APIs in one client: a GraphQL query with a cursor and a page loop, and the issue endpoint. The cost is two response shapes, two rate-limit budgets and two ways to be wrong; the benefit is that each read is the cheapest one that answers its question.
 - An empty answer and a failed read are different facts, and conflating them is the failure this decision exists to prevent: a read that fails refuses the delivery, and an empty page is a board on which no such item exists.
-- Every look pays the project read, so the payload's saving is a per-card read rather than a call: the column and the assignee still come from the board, because a delivery's copy is a move old by the time it is acted on.
 - The token is the service's outbound security surface: read-mostly by construction, so a leak is bounded by its scopes rather than by the code. Nothing logs it, at any verbosity.
 - The write happens before the run, so the board shows the claim even when the run then fails to start. The board is ahead of reality by one run, which is the safe direction and the one a restart reconciles.
 

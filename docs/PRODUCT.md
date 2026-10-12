@@ -24,7 +24,7 @@ A card is a GitHub issue and its column is the project's `Status` field. The boa
 
 ## The rule
 
-One question, asked of every card every time the service looks: **what moves this card forward, who does it, and is it already happening?** Where the answer is an agent, the service writes the assignee and starts that agent's run — unless a run for that action is in flight, or the action has already been started since the card last changed. An action whose wake never started a run is not a wake at all, and is repeated at the next look.
+One question, asked of every card every time the service looks: **what moves this card forward, who does it, and is it already happening?** Where the answer is an agent, the service writes the assignee and starts that agent's run — unless that agent already has a run in flight, or the action has already been started since the card last changed. An action whose wake never started a run is not a wake at all, and is repeated at the next look.
 
 - **`Backlog`** — MaMa refines it; she reads the links between cards and decides what is blocked.
 - **`Refined`** — a developer holding no card builds it. With none free, the card waits and is looked at again when a run ends.

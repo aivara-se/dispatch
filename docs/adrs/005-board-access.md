@@ -15,7 +15,7 @@
 
 ## Consequences
 
-- The payload names what changed and the action it concerns, so the service never compares two board reads to find what moved; the board still answers the column and the assignee, and every look pays the project read ([008](008-the-service-acts-on-the-board.md)).
+- The payload names what changed and the action it concerns. It saves no call — every look reads the project in full ([008](008-the-service-acts-on-the-board.md)) — and what it carries is the event and its action, which a board read does not show: a review request lives on the pull request, not on the card.
 - Two APIs in one client: a GraphQL query with a cursor and a page loop, and the issue endpoint. The cost is two response shapes, two rate-limit budgets and two ways to be wrong; the benefit is that each read is the cheapest one that answers its question.
 - An empty answer and a failed read are different facts, and conflating them is the failure this decision exists to prevent: a read that fails refuses the delivery, and an empty page is a board on which no such item exists.
 - The token is the service's outbound security surface: read-mostly by construction, so a leak is bounded by its scopes rather than by the code. Nothing logs it, at any verbosity.

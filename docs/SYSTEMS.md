@@ -14,19 +14,19 @@
 3. It takes the event and the delivery id from the headers, and the repository and the action from the parsed body.
 4. The repository and the event must be on the allowlist. Anything else is answered `202` and dropped.
 5. The delivery id is checked against the cache. A delivery already seen is answered `202` and starts nothing.
-6. The router decides from the payload, and reads the board only where the payload is silent — a card's column, or its assignee.
+6. The router decides from the payload, and reads the board for what the delivery cannot state: the column the card is in when it is acted on, and the assignee no event named.
 7. Where the rule assigns a card, the write happens before the run: the assignee is written, and a write that fails fails the delivery.
 8. The runner starts the target agent's run with the reason. One delivery starts an agent at most once.
 9. One audit line is appended whatever happened: the ids, the decision, the assignee it wrote, the run it started, and the answer the sender was given.
 
-The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The response codes match the gateway's own set so one mental model covers both hops: `202` acted on or ignored, `400` a body that is not the JSON the signature covered, `401` a missing or non-verifying signature, `404` a path served by nobody, `413` the body limit, `429` the inbound rate limit, `503` no capacity.
+The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`), and a `2xx` is what GitHub wants: `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit; `502` the call or the run the delivery needed failed.
 
 ## The board
 
 - The board is one GitHub project in the organisation; a card is an issue, and its column is the project's `Status` field.
-- Reading the board is GitHub's GraphQL API — the project-items query, one page at a time; reading one card is its REST API, the issue endpoint. Both use the board token, built once at boot.
+- Reading the board is GitHub's GraphQL API — the project-items query, one page at a time — and a card's column is read there, because the REST issue endpoint carries no project field; reading one card for its assignee is that issue endpoint, which answers an issue and a pull request alike. Both use the board token, built once at boot.
 - The write is one field: the assignee of the card the rule names. It is the issue's assignee, which is the field the project shows. The service moves no card, writes no comment and closes nothing.
-- A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused, and GitHub sends it again.
+- A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused with a `5xx`, and it is a person's to re-dispatch, not the sender's (*Failure modes*).
 
 ## Starting a run
 
@@ -59,7 +59,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 - **A duplicate delivery** is answered from the cache; **an out-of-order one** is unaffected, because nothing orders events and every wake is a reason to re-read.
 - **A restart** loses the cache and the runs in flight, not the audit log; the board is re-read.
-- **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason; GitHub redelivers.
+- **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason, and the delivery is refused. GitHub does not redeliver a failed delivery: it keeps the delivery in its list for three days, where the operator re-dispatches it by hand, and the dead-letter file holds the same wake until they do. A refused wake is late, never lost.
 - **A wrong signature or an oversized body** is refused before anything is parsed, and **an event that is not ours** is answered `202` and dropped.
 - **GitHub unreachable** — the board read fails and the delivery is refused rather than answered done; the service keeps no queue of its own and invents no ordering.
 

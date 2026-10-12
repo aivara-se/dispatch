@@ -56,7 +56,7 @@ A card is a GitHub issue. The board is the source of truth: the service reads it
 - **A wrong or missing signature.** Refused before anything is parsed, so a sender configured with the wrong secret fails loudly in GitHub's delivery list.
 - **A body over the limit.** Refused at the service's own limit, before anything is parsed.
 - **An event that is not ours.** Accepted and ignored, never a `4xx`, so the delivery list still shows the real failures.
-- **A run that cannot be started, or a board read that fails.** Retried, then dead-lettered and the audit line says so; GitHub redelivers.
+- **A run that cannot be started, or a board read that fails.** Retried, then dead-lettered and the audit line says so; the delivery is refused, and the operator re-dispatches it by hand, because GitHub does not (`SYSTEMS.md`, *Failure modes*).
 
 ## What v1 does not do
 

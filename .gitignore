@@ -3,6 +3,6 @@
 
 # What the service writes down, when the configuration points a path at the
 # repository root: the audit log, and the dead-letter file. Anchored, so neither
-# pattern reaches a package or a fixture; #26 and #27 narrow them again.
+# pattern reaches a package or a fixture.
 /*.jsonl
 /dead-letter*

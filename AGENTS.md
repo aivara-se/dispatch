@@ -4,7 +4,7 @@ A Go service that receives GitHub's deliveries for the `aivara-se` organisation 
 
 ## Current Project Focus
 
-The design is settled and the code has not started. Land the foundation first — `cmd/dispatcher`, the config, the audit log, the frozen package interfaces and the gate — then write the receiver, the board, the router and the runner in parallel: each owns one package and edits nothing of the foundation.
+The design is settled and the code has not started. Land the foundation first — `cmd/dispatcher`, the config, the audit log, the frozen package interfaces (the state pass of [`008`](docs/adrs/008-the-service-acts-on-the-board.md) and its run table among them) and the gate — then write the receiver, the board, the router and the runner in parallel: each owns one package and edits nothing of the foundation.
 
 This section is steering, not policy. It is the one place where what matters right now outranks the standing rules below, it changes often, and it is replaced rather than appended to. Keep it short enough to read in full, and current enough to be worth reading.
 
@@ -12,7 +12,7 @@ This section is steering, not policy. It is the one place where what matters rig
 
 - **Never** write a field other than the assignee, and **never** move a card: the board is the source of truth and the service writes one field of it, the issue's assignee.
 - **Never** parse a request body before its signature verifies; **never** log a payload body or a secret value, at any verbosity — not the value, not a prefix, not a hash of it.
-- **Never** start an agent an event does not concern, never the operator, and never twice for one fact: one delivery starts at most one run.
+- **Never** start an agent the board's state does not call for, and **never** the operator; **never** start a second run for one agent, and **never** carry text a third party wrote into a run — the reason is identifiers and the service's own words ([`009`](docs/adrs/009-the-reason-carries-no-third-party-text.md)).
 - **Never** keep durable state of the service's own. The board is the state; there is no database, no service-owned queue and no ordering of events.
 - **Always** keep secret values out of this repository: the config names a secret and holds none, and a reference that resolves to nothing stops the process at boot rather than at the first event.
 - **Always** record a significant technology choice as an ADR before the code that depends on it lands.

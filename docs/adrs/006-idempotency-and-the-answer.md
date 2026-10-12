@@ -12,6 +12,7 @@
 - **An event that is not ours is `202`, never a `4xx`.** A `4xx` is for a request that was wrong, not for one that was ours to ignore.
 - **A failed read, a failed write or a run that will not start fails the delivery**: it is answered `502` rather than `202` and forgotten, so a wake the service could not act on is never silently lost. The recovery is then a person's (`SYSTEMS.md`, *Failure modes*).
 - **A dead-lettered delivery drops its dedup entry**, so an operator's re-dispatch after a fix is not swallowed as a duplicate.
+- **One inbound limit**: sixty requests a minute from one source, answered `429` before anything is parsed and before any audit line is appended (provisional; the first live week freezes the number). An unauthenticated POST must cost a header check and nothing else, and a service with no limit in front of it pays a disk append per request.
 
 ## Consequences
 

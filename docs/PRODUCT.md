@@ -1,62 +1,52 @@
 # dispatcher: product
 
-GitHub posts to `dispatcher` when something happens in the `aivara-se` organisation. It verifies the delivery, decides which agent the fact concerns, assigns the card to that agent, and starts that agent's run with the reason attached. The operator of a small fleet — one person, four bots, one board — installs it, trusts it, and reads its log when a wake is missed; the bots are the ones woken. The service does not do the work.
+GitHub posts to `dispatcher` when something happens in the `aivara-se` organisation. It verifies the delivery, works out which agents the fact concerns, writes one field of the board, and starts their runs with the reason attached. The operator of a small fleet — one person, four bots, one board — installs it, trusts it, and reads its log when a wake is missed. The service does not do the work.
 
-A wake is a **reason, not an instruction**: the service says *why now*, and the agent re-reads the board and the pull request and decides what to do. A wake may therefore be early, late, duplicated or out of order and the outcome is the same. The mechanism behind it is the subject of the decisions in `docs/adrs/`.
+A wake is a **reason, not an instruction**: the service says *why now*, and the agent re-reads the board and the pull request and decides what to do. A wake may therefore be early, late, duplicated or out of order and the outcome is the same. The mechanisms behind it are the subject of the decisions in `docs/adrs/`.
 
 ## The board
 
 One project, four columns. The operator's only act is to add a card to `Backlog`.
 
-- `Backlog` — the operator's inbox, and MaMa's. Every card added here is assigned to her.
-- `Refined` — ready to build. A card here is assigned to a developer.
-- `Started` — being built. A developer holds one card at a time, and it stays here until its pull request merges.
+- `Backlog` — the operator's inbox, and MaMa's.
+- `Refined` — ready to build.
+- `Started` — being built; a developer holds one card at a time, until its pull request merges.
 - `Finished` — merged, and in most cases deployed.
 
-A card is a GitHub issue. The board is the source of truth: the service reads it, and writes one field, the assignee.
+A card is a GitHub issue and its column is the project's `Status` field. The board is the service's only state: it reads the board and writes one field of it, the assignee. Work that is not a card on the board is work the service cannot see.
 
 ## The agents
 
-- **MaMa** refines. She checks the card is feasible, fills in what is missing, splits it into sub-cards when it is too big, links the cards that block it, and moves it to `Refined` when it is ready. A blocked card stays in `Backlog`.
+- **MaMa** refines: she checks a card is feasible, fills in what is missing, splits it when it is too big, links what blocks it, and moves it to `Refined`.
 - **MeMe and MiMi** build, one card at a time, to a merged pull request.
-- **Every agent reviews.** A review is not a card and never takes a developer's one slot. An agent reviews a peer's pull request and never pushes to it: the author applies every change.
-- **MoMo** attacks and holds no card. It writes no product code, so a `Refined` card is only ever assigned to MeMe or MiMi. MoMo is woken by the same review facts as any reviewer: a review requested from MoMo, or a comment, a review or a label on a pull request MoMo is on.
+- **MoMo** attacks and holds no card: it writes no product code, so `Refined` work is only ever assigned to MeMe or MiMi.
+- **Every agent reviews.** A review is not a card and never takes a developer's slot, and a reviewer never pushes to a peer's branch: the author applies every change.
 
-## What the dispatcher does
+## The rule
 
-- **A card is assigned to an agent** — the service starts that agent's run, unless it is already working on something else.
-- **A card is added to `Backlog`** — the service assigns it to MaMa and starts her run.
-- **A card is moved to `Refined`** — the service assigns it to a developer that holds no card and is not already working, and starts that developer's run. A card with no developer free waits in `Refined` until one is.
-- **A card is moved to `Finished`** — the service starts MaMa's run, to see which blocked cards it has unblocked.
-- **A review is requested** — the service starts the named reviewer's run.
-- **A comment, a review or a label change lands on a pull request** — the service starts every agent on that pull request, its author and its reviewers, except the agent that made it.
-- **A pull request merges** — the service starts its author's run, to move the card to `Finished`.
-- **A pull request closes unmerged** — the service starts its author's run, to reopen or rework it.
-- **A comment lands on a card** — the service starts the card's assignee, except the agent that made it.
-- **Anything else** is accepted, logged, and woken for nobody. It is never refused.
+One question, asked of every card every time the service looks: **what moves this card forward, who does it, and is it already happening?** Where the answer is an agent and nothing is in flight for it, the service writes the assignee and starts that agent's run.
+
+- **`Backlog`** — MaMa refines it. A card whose blockers are open waits.
+- **`Refined`** — a developer holding no card builds it. With none free, the card waits and is looked at again when a run ends.
+- **`Started`** — nothing while its run is in flight. With no run, its assignee, to finish or restart it.
+- **A review requested on a pull request** — the named reviewer.
+- **Changes requested on a pull request** — its author.
+- **A pull request approved and mergeable** — the merge is the operator's. *How the service reaches the operator is not decided.*
+- **A pull request merged** — MaMa, for the cards it closed and the blockers it cleared.
+- **A pull request closed unmerged** — its author, to reopen or rework it.
+- **A card whose next step is the operator's** — the operator again. *The same undecided route.*
+
+The service looks in three places and nowhere else: when a delivery arrives, when a run it started ends, and once at boot. Nothing else fires it — there is no clock.
 
 ## What it never does
 
-- Never starts an agent an event does not concern, and never the operator.
-- Never starts an agent twice for one fact.
-- Never starts a second card for a developer that already holds one.
+- Never starts an agent the state does not call for, and never the operator.
+- Never starts a second run for one agent.
 - Never writes a field other than the assignee, and never moves a card.
 - Never parses a body before the signature verifies, and never logs a payload body or a secret value.
+- Never carries text a third party wrote into a run: the reason is identifiers and the service's own words.
 - Never orders events, and never depends on their order.
-
-## The edge cases, and what handles each
-
-- **A redelivered delivery.** The delivery id is remembered for an hour; the repeat wakes nobody.
-- **One fact, two deliveries.** A card added with a status is two events and a burst of comments is many. A second wake is a reason to re-read and changes nothing, and a burst on one card coalesces into one wake.
-- **Every developer is busy.** A card in `Refined` is not lost: it is assigned when one frees.
-- **Two cards refined at once.** Each is assigned to a different developer; no card is assigned twice.
-- **A restart.** The board holds the state the service needs, so a restart loses no work, and the cost is at most one duplicate wake.
-- **A card moved into `Started` by hand.** No developer is picked for it — it is not in `Refined` — and if it is assigned, its assignee is started like any other assignment.
-- **The agent acted.** No agent is started for its own action.
-- **A wrong or missing signature.** Refused before anything is parsed, so a sender configured with the wrong secret fails loudly in GitHub's delivery list.
-- **A body over the limit.** Refused at the service's own limit, before anything is parsed.
-- **An event that is not ours.** Accepted and ignored, never a `4xx`, so the delivery list still shows the real failures.
-- **A run that cannot be started, or a board read that fails.** Retried, then dead-lettered and the audit line says so; the delivery is refused, and the operator re-dispatches it by hand, because GitHub does not (`SYSTEMS.md`, *Failure modes*).
+- Never invents a queue: nothing about the service survives its own restart except the board and its log.
 
 ## What v1 does not do
 
@@ -69,11 +59,11 @@ A card is a GitHub issue. The board is the source of truth: the service reads it
 
 v1 is done when each of these holds, and each is checkable by the operator.
 
-- One card added to `Backlog`, and nothing else touched, reaches a merged pull request: MaMa refines it, a developer builds it, a peer reviews it, and the service carries every wake on the way.
-- A card added to `Backlog` is assigned to MaMa and her run starts within seconds of the event (provisional; the first live delivery freezes the number).
-- A card moved to `Refined` is assigned to MeMe or MiMi, whichever holds no card, and no card is assigned to two.
-- A card moved to `Finished` starts MaMa's run and no other.
-- A review request starts the named reviewer alone, and a merge starts the author alone.
+- One card added to `Backlog`, and nothing else touched, reaches a merged pull request, and the service carries every wake on the way.
+- A card already `Refined` when the service boots reaches a developer with no delivery required.
+- A card added to `Backlog` is assigned to MaMa and her run starts within seconds (provisional; the first live delivery freezes the number).
+- No card sits in `Started` with no run behind it: a run that ended without its card moving is looked at again.
+- A review request starts the named reviewer alone; a merge starts MaMa alone; no agent is started for its own action.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - A run the service could not start is dead-lettered rather than dropped.
-- The audit log answers, for any delivery, whether an agent was started and, when not, why.
+- The audit log answers, for any delivery, whether an agent was started and, when not, why — and, for any card, what its runs cost.

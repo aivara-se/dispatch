@@ -40,7 +40,7 @@ The service looks in three places and nowhere else: when a delivery arrives, whe
 
 ## What it never does
 
-- Never starts an agent the state does not call for, and never the operator.
+- Never starts an agent the state does not call for, and never the operator. The actor a delivery names is never in the wake set: an agent is not woken for what it just did.
 - Never starts a second run for one agent.
 - Never writes a field other than the assignee, and never moves a card.
 - Never parses a body before the signature verifies, and never logs a payload body or a secret value.

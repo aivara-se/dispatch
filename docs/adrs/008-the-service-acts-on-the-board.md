@@ -13,13 +13,13 @@ Running the flow by hand for a day showed what an event table cannot do. Thirty-
 - **The question is per card, not per event**: what moves this card forward, who does it, and is it already happening. `PRODUCT.md` (*The rule*) is that list.
 - **It looks at three moments**: a delivery arrives, a run it started ends, and once at boot. Nothing else fires it — there is still no clock.
 - **"Is it already happening" is the service's own run table**, held in memory and rebuilt at boot from the cards in `Started` and the processes it finds. The board is the durable state, but it is not the record of a run.
-- **The pass writes one field and does not repeat a wake.** It remembers, per card, the next action it last started a run for: the same action is not started twice for an unchanged card, and is started again when the card changed, or when the earlier run never started — which is the dropped wake the pass exists for.
+- **The pass writes one field and repeats a wake only to repair a claim.** It remembers, per card, the action it last started a run for, and does not start that action again for a card that has not moved since — except a card in `Started` with no run, which claims work that is not happening. A card its agent has been given and has not moved is otherwise the agent's decision, not a wake to repeat.
 
 ## Consequences
 
 - A card that sits still is a card the service has an answer for. That is what makes a card predating the service, a card an agent created for itself, and a card whose wake was dropped, reachable at all.
 - Two new triggers cost one board read each. The full project read is the service's expensive call, so it happens on those three moments and never on a payload's say-so alone.
-- The run table is memory, so a restart forgets which runs were in flight and the boot pass rebuilds its picture from `Started`. A restart can therefore cost one duplicate run; the agent re-reads the board when it runs, which is what keeps that harmless.
+- The run table and the per-card record are memory, so a restart forgets which runs were in flight and which cards it had already woken. The boot pass rebuilds the run table from `Started` and starts one run for each card it finds unsettled; the agent re-reads the board when it runs, which is what keeps that harmless.
 - The board does not have to carry a mark for every run, so a column keeps its single meaning: a stage of the work, never a fact about the service.
 - The service can act on a card no delivery named, so the audit line records the trigger as well as the card, and *boot* is one of the triggers.
 

@@ -59,7 +59,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 - **A duplicate delivery** is answered from the cache; **an out-of-order one** is unaffected, because nothing orders events and every wake is a reason to re-read.
 - **A restart** loses the cache and the runs in flight, not the audit log; the board is re-read.
-- **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason, and the delivery is refused. GitHub does not redeliver a failed delivery: it keeps the delivery in its list for three days, where the operator re-dispatches it by hand, and the dead-letter file holds the same wake until they do. A refused wake is late, never lost.
+- **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason, and the delivery is refused. GitHub does not redeliver a failed delivery (*Handling failed webhook deliveries* and *Redelivering webhooks*, docs.github.com, read 2026-10-12): it keeps the delivery in its list for three days, where the operator re-dispatches it by hand, and the dead-letter file holds the same wake until they do. A refused wake is late, never lost.
 - **A wrong signature or an oversized body** is refused before anything is parsed, and **an event that is not ours** is answered `202` and dropped.
 - **GitHub unreachable** — the board read fails and the delivery is refused rather than answered done; the service keeps no queue of its own and invents no ordering.
 

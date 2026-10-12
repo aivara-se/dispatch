@@ -6,7 +6,7 @@ Every record beside this one rests on behaviour of a program outside this tree: 
 
 ## Decision
 
-Where a record rests on the behaviour of something outside this repository, it names what was read — the file and the repository, or the document, and the date — in the sentence that makes the claim. The check is repeated before the code that depends on the claim lands, and the name is what makes the repeat possible.
+Where a record rests on the behaviour of something outside this repository, it names what was read — the file and the repository, or the document, and the date — in the sentence that makes the claim. Where the claim's home is a document rather than a record, the document carries the source and the record names the home. The check is repeated before the code that depends on the claim lands, and the name is what makes the repeat possible.
 
 ## Consequences
 

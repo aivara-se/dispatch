@@ -19,7 +19,7 @@ Running the flow by hand for a day showed what an event table cannot do. Thirty-
 
 - A card that sits still is a card the service has an answer for. That is what makes a card predating the service, a card an agent created for itself, and a card whose wake was dropped, reachable at all.
 - Two new triggers cost one board read each. The full project read is the service's expensive call, so it happens on those three moments and never on a payload's say-so alone.
-- The run table and the per-card record are memory, so a restart forgets which runs were in flight and which cards it had already woken. The boot pass rebuilds the run table from `Started` and starts one run for each card it finds unsettled; the agent re-reads the board when it runs, which is what keeps that harmless.
+- The run table and the per-card record are memory, so a restart forgets which runs were in flight and which cards it had already woken. The boot pass rebuilds the run table from `Started` and starts one run per agent for the cards it finds unsettled — one run per agent is the runner's rule, so a pass that finds twenty-eight unsettled cards for one agent starts one run, not twenty-eight; the agent re-reads the board when it runs, which is what keeps the extra run harmless.
 - The board does not have to carry a mark for every run, so a column keeps its single meaning: a stage of the work, never a fact about the service.
 - The service can act on a card no delivery named, so the audit line records the trigger as well as the card, and *boot* is one of the triggers.
 
@@ -27,5 +27,5 @@ Running the flow by hand for a day showed what an event table cannot do. Thirty-
 
 - **The event table alone.** Rejected: it cannot move a card that generates no event, it drops a wake whose target is busy with nothing to replay it, and every card that predates the service is invisible to it.
 - **A clock** — a poll every few minutes. Rejected for now: a trigger that fires while nothing has changed buys latency the three moments do not, and each of them is a moment the state actually moved.
-- **A durable run store** — a file, a row, a marker. Rejected: the board is the durable state and the run table is rebuilt at boot; the cost of rebuilding is at worst one duplicate run.
+- **A durable run store** — a file, a row, a marker. Rejected: the board is the durable state and the run table is rebuilt at boot; the cost of rebuilding is at most one extra run per agent.
 - **The board's `Started` column as the record of a run.** Rejected: it is a developer's column, it is moved by whoever holds the card, and GitHub's own project automation sets it when a pull request opens (observed on the live board, 2026-10-12).

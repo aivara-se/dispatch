@@ -40,7 +40,7 @@ The service looks in three places and nowhere else: when a delivery arrives, whe
 
 ## What it never does
 
-- Never starts an agent the state does not call for, and never the operator. The actor a delivery names is never in the wake set: an agent is not woken for what it just did.
+- Never starts an agent the state does not call for, and never the operator. The delivery's own actor is never in that delivery's wake set: an agent is not woken for the event it made, though a card it opened is still a card a look may wake it for.
 - Never starts a second run for one agent.
 - Never writes a field other than the assignee, and never moves a card.
 - Never parses a body before the signature verifies, and never logs a payload body or a secret value.
@@ -63,7 +63,7 @@ v1 is done when each of these holds, and each is checkable by the operator.
 - A card already `Refined` when the service boots reaches a developer with no delivery required.
 - A card added to `Backlog` is assigned to MaMa and her run starts within seconds (provisional; the first live delivery freezes the number).
 - No card sits in `Started` with no run behind it: a run that ended without its card moving is looked at again.
-- A review request wakes the named reviewer; a merge wakes MaMa; no agent is woken for its own action. One look may wake more than one agent, because a look answers for every card it reads.
+- A review request wakes the named reviewer; a merge wakes MaMa; no agent is woken for the delivery it made. One look may wake more than one agent, because a look answers for every card it reads — and a card an agent opened is still a card, so a look wakes its assignee for it like any other.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - A run the service could not start is dead-lettered rather than dropped.
 - The audit log answers, for any delivery, whether an agent was started and, when not, why — and, for any card, what its runs cost.

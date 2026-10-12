@@ -14,7 +14,7 @@
 3. It takes the event and the delivery id from the headers, and the repository and the action from the parsed body.
 4. The repository and the event must be on the allowlist. Anything else is answered `202` and dropped.
 5. The delivery id is checked against the cache. A delivery already seen is answered `202` and starts nothing.
-6. The router works out which agents the fact concerns, and reads the board for the state the delivery cannot state: a card's column, its assignee, and whether a run is in flight.
+6. The router works out which agents the fact concerns. It reads the board for what the delivery cannot state — a card's column and its assignee — and the run table for whether a run is in flight.
 7. Where the rule assigns a card, the write happens before the run: the assignee is written, and a write that fails fails the delivery.
 8. The runner starts the target agent's run with the reason, and records the run — its profile, what it concerns, and the session id it started.
 9. One audit line is appended for every look, whatever happened: the trigger — a delivery that passed verification, a run ending, or boot — the delivery ids where there were any, the decision, the card the run concerns where it concerns one, the assignee it wrote, the run and its session id, and the answer the sender was given where there was one.
@@ -26,7 +26,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - The board is read in full — every card and its column — at boot, and again when a run the service started ends. A delivery is a third trigger, not the only one.
 - Each card is then asked the question `PRODUCT.md` (*The rule*) answers: what moves it forward, who does it, and is it already happening. The list there is the whole rule; this section is only where the state comes from.
 - **Is it already happening** is the service's own run table, held in memory and rebuilt at boot from the cards in `Started` and the processes it finds. The board cannot answer it: a review wake names an agent whose card never moves, and most runs a delivery starts belong to no card at all.
-- The pass writes the assignee and nothing else, and it does not repeat a wake: an action it has already started for a card is started again only when the card has changed since, or when the earlier run never started. A card whose next action the pass has not started since the card last changed is **unsettled** — a card in `Started` included, whose next action is to finish or restart it, so the repair is bounded like every other action and a run that ended without moving its card is not started twice.
+- The pass writes the assignee and nothing else, and it does not repeat a wake. An action it has attempted for a card is attempted again when the card has changed since, or when that attempt never started a run — a wake that started nothing repairs nothing. **Unsettled** means a card whose next action the pass has not attempted since the card last changed, or whose attempt never started a run.
 - **One run per agent per look**, which is the runner's rule: a look that finds twenty unsettled cards for one agent starts one run, concerning the lowest-numbered of them. Where a delivery names its own target, the run concerns what the delivery names — a card or a pull request — and a run may concern no card at all, which is most of them.
 
 ## The board
@@ -48,7 +48,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 - **One organisation webhook**, not one per repository, covers a new repository with no second setup step; an organisation webhook is organisation-owner administration, so the operator creates it (observed on the live organisation, 2026-10-12). It subscribes to every event the service acts on, and the allowlist makes that safe.
 - **One token** reads the project and the issues and writes the assignee, with the scopes `ADR 005` fixes. Read-mostly, one field written.
-- The webhook is the trigger; the API answers what a payload does not carry. It saves no call — a look reads the project in full — and what it carries is the event and its action, which no board read shows.
+- The webhook is one of the three triggers (*The state pass*), and the API answers what a payload does not carry. What the payload is for is `ADR 005`'s.
 
 ## Configuration and secrets
 
@@ -59,7 +59,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 ## Storage
 
 - **No database.** The board is the durable state; the service holds no source of truth of its own.
-- In memory: the delivery-id cache, with a one-hour TTL, the run table, and the per-card record of the action last started for it — what the pass reads to avoid repeating a wake. None of the three survives a restart.
+- In memory: the delivery-id cache, with a one-hour TTL, the run table, and the per-card record of the action last attempted for it — what the pass reads to avoid repeating a wake. None of the three survives a restart.
 - On disk: the audit log, one JSON Lines line per look in arrival order, size-rotated; and the dead-letter file for a delivery or a run that failed. The service appends to both and rewrites neither.
 
 ## Failure modes

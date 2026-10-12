@@ -15,10 +15,10 @@
 
 ## Consequences
 
-- The payload first. A decision the payload can answer — which event, which card, which action — spends no call, so the board is read only for what the delivery cannot state: the column the card is in when the wake is acted on, and the assignee no event named.
+- The payload first. A decision the payload can answer — which event, which card, which action — saves the per-card read that would name it, though every look pays the project read ([008](008-the-service-acts-on-the-board.md)).
 - Two APIs in one client: a GraphQL query with a cursor and a page loop, and the issue endpoint. The cost is two response shapes, two rate-limit budgets and two ways to be wrong; the benefit is that each read is the cheapest one that answers its question.
 - An empty answer and a failed read are different facts, and conflating them is the failure this decision exists to prevent: a read that fails refuses the delivery, and an empty page is a board on which no such item exists.
-- Reading the column from the board rather than from the payload costs nothing extra where the rule already reads the board, and one call where it does not: the `Refined` rule reads the whole board anyway, for who holds what, while a card moved to `Finished` or into `Started` by hand turns on the column alone. An answer one delivery old is worth less than one that is current.
+- Every look pays the project read, so the payload's saving is a per-card read rather than a call: the column and the assignee still come from the board, because a delivery's copy is a move old by the time it is acted on.
 - The token is the service's outbound security surface: read-mostly by construction, so a leak is bounded by its scopes rather than by the code. Nothing logs it, at any verbosity.
 - The write happens before the run, so the board shows the claim even when the run then fails to start. The board is ahead of reality by one run, which is the safe direction and the one a restart reconciles.
 

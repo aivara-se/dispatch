@@ -24,7 +24,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 ## The board
 
 - The board is one GitHub project in the organisation; a card is an issue, and its column is the project's `Status` field.
-- Reading the board is GitHub's GraphQL API — the project-items query, one page at a time — and a card's column comes from it; reading one card for its assignee is that issue endpoint. Both use the board token, built once at boot.
+- Reading the board is GitHub's GraphQL API — the project-items query, one page at a time — and a card's column comes from it; reading one card for its assignee is the REST issue endpoint. Both use the board token, built once at boot.
 - The write is one field: the assignee of the card the rule names. It is the issue's assignee, which is the field the project shows. The service moves no card, writes no comment and closes nothing.
 - A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused with a `5xx`, and it is a person's to re-dispatch, not the sender's (*Failure modes*).
 

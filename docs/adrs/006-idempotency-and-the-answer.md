@@ -29,4 +29,4 @@
 - **A `4xx` for an event we do not act on.** Rejected, for the reason [002](002-github-webhook-ingestion.md) rejects the same for a repository that is not on the allowlist: the delivery list stops distinguishing an excluded event from a broken one.
 - **`200` for a delivery acted on.** Rejected: it says the work is finished when a run has only been started, and `202` — accepted, not complete — is the code the gateway answers an accepted wake with, so the two hops read alike where they agree.
 - **`503` for a failed read or write.** Rejected: the service is up and answering; what failed is the call it made, which is the same thing the gateway reports as `502`.
-- **A lock per card, held until its run ends.** Rejected: the board's `Started` column already says which agent is working, and a lock is state the service would have to survive a restart with.
+- **A lock per card, held until its run ends.** Rejected: the run table already says which agent is working ([008](008-the-service-acts-on-the-board.md)), and a lock is state the service would have to survive a restart with.

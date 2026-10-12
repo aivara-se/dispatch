@@ -62,7 +62,7 @@ v1 is done when each of these holds, and each is checkable by the operator.
 - One card added to `Backlog`, and nothing else touched, reaches a merged pull request, and the service carries every wake on the way.
 - A card already `Refined` when the service boots reaches a developer with no delivery required.
 - A card added to `Backlog` is assigned to MaMa and her run starts within seconds (provisional; the first live delivery freezes the number).
-- No card sits in `Started` with no run behind it: a run that ended without its card moving is looked at again.
+- A card in `Started` with no run behind it is woken once per change and not at every look: a run that ended without moving its card is its agent's to move.
 - A review request wakes the named reviewer; a merge wakes MaMa; no agent is woken for the delivery it made. One look may wake more than one agent, because a look answers for every card it reads — and a card an agent opened is still a card, so a look wakes its assignee for it like any other.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - A run the service could not start is dead-lettered rather than dropped.

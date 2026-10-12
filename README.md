@@ -1,6 +1,6 @@
 # dispatcher
 
-The service that reads GitHub's deliveries for the `aivara-se` organisation and wakes the one agent a fact concerns, with the reason. It does not do the work: a wake says *why now*, and the agent re-reads the board and the pull request.
+The service that reads GitHub's deliveries for the `aivara-se` organisation and wakes the agents the board's state calls for, with the reason. It does not do the work: a wake says *why now*, and the agent re-reads the board and the pull request.
 
 **The design is settled and the code has not started.**
 

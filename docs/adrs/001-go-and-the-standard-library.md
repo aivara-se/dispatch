@@ -2,7 +2,7 @@
 
 ## Context
 
-This service is a long-running network process that must be up when cron is not: it listens for GitHub's deliveries and wakes one agent per event. That is a different kind of program from the fleet's monitor scripts, which run, print and exit. Go is the language it is written in; what needs recording is why, and what the choice rules out.
+This service is a long-running network process that must be up when cron is not: it listens for GitHub's deliveries and wakes the agents the board's state calls for ([008](008-the-service-acts-on-the-board.md)). That is a different kind of program from the fleet's monitor scripts, which run, print and exit. Go is the language it is written in; what needs recording is why, and what the choice rules out.
 
 ## Decision
 

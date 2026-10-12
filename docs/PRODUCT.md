@@ -6,7 +6,7 @@ A wake is a **reason, not an instruction**: the service says *why now*, and the 
 
 ## The board
 
-One project, four columns. A card enters the board when the operator adds it to `Backlog`, and a pull request merges when he merges it: the two acts the service does not take.
+One project, four columns. A card is added to the board by the operator or by an agent, and a pull request merges when the operator merges it: the two acts the service does not take.
 
 - `Backlog` — the operator's inbox, and MaMa's.
 - `Refined` — ready to build.

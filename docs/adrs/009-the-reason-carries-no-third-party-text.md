@@ -2,7 +2,7 @@
 
 ## Context
 
-A wake is a reason: `hermes --profile <bot> chat -q "<reason>"`. That reason is an argument to a program holding tools, credentials and a sandbox, started on the operator's host. Everything that would make a reason vivid — an issue title, a comment body, a pull request body, a branch name — is text a third party wrote, and anyone who can open an issue in the organisation is a third party. [002](002-github-webhook-ingestion.md) fixes the rule for the request path — no field becomes a path, a command, a URL or a query — and stops at the point where the reason is composed, leaving the one place payload text reaches an agent unruled.
+A wake is a reason: `hermes --profile <bot> chat -q "<reason>"`. That reason is an argument to a program started on the operator's host, holding the tools, credentials and sandbox the profile gives it (observed on the host, 2026-10-12). Everything that would make a reason vivid — an issue title, a comment body, a pull request body, a branch name — is text a third party wrote, and anyone who can open an issue in the organisation is a third party. [002](002-github-webhook-ingestion.md) fixes the rule for the request path — no field becomes a path, a command, a URL or a query — and stops at the point where the reason is composed, leaving the one place payload text reaches an agent unruled.
 
 ## Decision
 

@@ -16,7 +16,7 @@
 5. The delivery id is checked against the cache. A delivery already seen is answered `202` and starts nothing.
 6. The router works out which agents the fact concerns, and reads the board for the state the delivery cannot state: a card's column, its assignee, and whether a run is in flight.
 7. Where the rule assigns a card, the write happens before the run: the assignee is written, and a write that fails fails the delivery.
-8. The runner starts the target agent's run with the reason, and records the run — its profile, the card it concerns, and the session id it started.
+8. The runner starts the target agent's run with the reason, and records the run — its profile, the card it concerns, and the session id it started. A run concerns one card: the card the delivery names, or, where a look found several cards for that agent, the lowest-numbered card unsettled for it.
 9. One audit line is appended for every look, whatever happened: the trigger — a delivery that passed verification, a run ending, or boot — the ids, the decision, the assignee it wrote, the run and its session id, and the answer the sender was given where there was one.
 
 The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`): `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit, whose limit, window and order against the audit append are `ADR 006`'s; `502` the call or the run the delivery needed failed.
@@ -26,7 +26,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - The board is read in full — every card and its column — at boot, and again when a run the service started ends. A delivery is a third trigger, not the only one.
 - Each card is then asked the question `PRODUCT.md` (*The rule*) answers: what moves it forward, who does it, and is it already happening. The list there is the whole rule; this section is only where the state comes from.
 - **Is it already happening** is the service's own run table, held in memory and rebuilt at boot from the cards in `Started` and the processes it finds. The board cannot answer it: a review wake names an agent whose card never moves, and most runs a delivery starts belong to no card at all.
-- The pass writes the assignee and nothing else, and it does not repeat a wake: for each card it remembers the action it last started a run for, and starts that action again only when the card has changed since, when the earlier run never started, or when the card is in `Started` with no run behind it — the one column that claims work is in flight, and the case the pass exists for.
+- The pass writes the assignee and nothing else, and it starts at most one run per agent per look — the runner's rule — carrying the reason for the one card that run concerns.
 
 ## The board
 

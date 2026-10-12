@@ -28,4 +28,4 @@ Running the flow by hand for a day showed what an event table cannot do. Thirty-
 - **The event table alone.** Rejected: it cannot move a card that generates no event, it drops a wake whose target is busy with nothing to replay it, and every card that predates the service is invisible to it.
 - **A clock** — a poll every few minutes. Rejected for now: a trigger that fires while nothing has changed buys latency the three moments do not, and each of them is a moment the state actually moved.
 - **A durable run store** — a file, a row, a marker. Rejected: the board is the durable state and the run table is rebuilt at boot; the cost of rebuilding is at worst one duplicate run.
-- **The board's `Started` column as the record of a run.** Rejected: it is a developer's column, it is moved by whoever holds the card, and GitHub's own automation sets it when a pull request opens.
+- **The board's `Started` column as the record of a run.** Rejected: it is a developer's column, it is moved by whoever holds the card, and GitHub's own project automation sets it when a pull request opens (observed on the live board, 2026-10-12).

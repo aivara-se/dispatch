@@ -19,7 +19,7 @@
 8. The runner starts the target agent's run with the reason, and records the run — its profile, the card it concerns, and the session id it started.
 9. One audit line is appended whatever happened: the ids, the decision, the assignee it wrote, the run and its session id, and the answer the sender was given.
 
-The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`): `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit, whose limit, window and order against the audit append are `ADR 008`'s; `502` the call or the run the delivery needed failed.
+The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`): `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit, whose limit, window and order against the audit append are `ADR 006`'s; `502` the call or the run the delivery needed failed.
 
 ## The state pass
 
@@ -40,7 +40,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - **The requirement**: start one bounded run of the named agent's own profile, hand it the reason, and know while it is running.
 - **The mechanism**: the runner launches that profile's agent as a child process of the service — the Hermes CLI on the profile, `hermes --profile <bot> chat -q "<reason>"` — and tracks the child: running, exited, its exit code and its last output. The run is the profile's own: its prompt, skills, memory and delivery come from the profile, and the dispatcher adds only the reason.
 - **One run per agent**: the runner starts no second run for a profile that already has one, and the run table is what it reconciles against after a restart.
-- **The reason** is the run's input and nothing else: identifiers, and a sentence the service wrote. Text a third party wrote never reaches it (`ADR 008`), because the reason is an argument to a program that holds tools and credentials.
+- **The reason** is the run's input and nothing else: identifiers, and a sentence the service wrote. Text a third party wrote never reaches it (`ADR 009`), because the reason is an argument to a program that holds tools and credentials.
 - **The fallback**: where a profile's gateway must own the run and its delivery, the same wake is a signed POST to that profile's route on the gateway — `/webhooks/<route>`, or `/p/<profile>/webhooks/<route>` where the gateway multiplexes profiles — with the same `X-Hub-Signature-256` form GitHub uses. The run's lifetime is then the gateway's, and the service tracks it through the run table rather than through a child process.
 
 ## GitHub access
@@ -60,7 +60,6 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - **No database.** The board is the durable state; the service holds no source of truth of its own.
 - In memory: the delivery-id cache, with a one-hour TTL, and the run table. A restart forgets both, and the pass at boot rebuilds what it can (`ADR 008`).
 - On disk: the audit log, one JSON Lines line per delivery in arrival order, size-rotated; and the dead-letter file for a delivery or a run that failed. The service appends to both and rewrites neither.
-- The restart cost is named rather than hidden: a redelivery inside the lost hour can start one extra run, and a run that was in flight when the service died is restarted by the pass, because its card is still in `Started`.
 
 ## Failure modes
 
@@ -72,5 +71,5 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 ## Checks
 
-- The gate, on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...`.
+- The gate, which `#28` lands as a workflow, on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...`.
 - The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the pass over a fixture board at boot, the runner's start and its tracking, and one signed POST driven end to end. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.

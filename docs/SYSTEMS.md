@@ -72,5 +72,5 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 ## Checks
 
-- The gate runs on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...` — by the reviewer until the workflow lands.
+- The gate runs on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...`.
 - The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the pass over a fixture board at boot, the runner's start and its tracking. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.

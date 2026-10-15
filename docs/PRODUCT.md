@@ -46,7 +46,7 @@ The service looks in three places and nowhere else: when a delivery arrives, whe
 - Never parses a body before the signature verifies, and never logs a payload body or a secret value.
 - Never carries text a third party wrote into a run: the reason is identifiers and the service's own words.
 - Never orders events, and never depends on their order.
-- Never invents a queue: nothing about the service survives its own restart except the board and its log.
+- Never invents a queue: nothing about the service survives its own restart except the board and its log files.
 
 ## What v1 does not do
 

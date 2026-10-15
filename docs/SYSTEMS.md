@@ -28,6 +28,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - **Is it already happening** is the service's own run table, held in memory and rebuilt at boot from the cards in `Started` and the processes it finds. The board cannot answer it: a review wake names an agent whose card never moves, and most runs a delivery starts belong to no card at all.
 - The pass writes the assignee and nothing else, and it does not repeat a wake. An action it has attempted for a card is attempted again when the card has changed since, or when that attempt never started a run — a wake that started nothing repairs nothing. **Unsettled** means a card whose next action the pass has not attempted since the card last changed, or whose attempt never started a run.
 - **One run per agent per look**, which is the runner's rule: a look that finds twenty unsettled cards for one agent starts one run, concerning the lowest-numbered of them. Where a delivery names its own target, the run concerns what the delivery names — a card or a pull request — and a run may concern no card at all, which is most of them.
+- **Looks run one at a time.** The receiver verifies, deduplicates and answers; the pass itself is serial, so two deliveries never decide against the same run table concurrently.
 
 ## The board
 
@@ -72,4 +73,4 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 ## Checks
 
 - The gate runs on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...` — by the reviewer until the workflow lands.
-- The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the pass over a fixture board at boot, the runner's start and its tracking, and one signed POST driven end to end. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.
+- The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the pass over a fixture board at boot, the runner's start and its tracking. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.

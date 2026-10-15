@@ -48,7 +48,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 - **One organisation webhook**, not one per repository, covers a new repository with no second setup step; an organisation webhook is organisation-owner administration, so the operator creates it (observed on the live organisation, 2026-10-12). It subscribes to every event the service acts on, and the allowlist makes that safe.
 - **One token** reads the project and the issues and writes the assignee, with the scopes `ADR 005` fixes. Read-mostly, one field written.
-- The webhook is one of the three triggers (*The state pass*), and the API answers what a payload does not carry. What the payload is for is `ADR 005`'s.
+- A delivery is one trigger; the API answers what a payload does not carry. What the payload is for is `ADR 005`'s.
 
 ## Configuration and secrets
 

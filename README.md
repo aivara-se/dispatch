@@ -13,6 +13,8 @@ go build ./cmd/dispatcher     # ./dispatcher, in the repository root
 
 Go 1.26 or newer, standard library only — the module carries no requires ([`001`](docs/adrs/001-go-and-the-standard-library.md)).
 
+The audit file defaults to `dispatcher-audit.jsonl` in the working directory, its dead-letter sibling beside it; `--audit` sets the path and `--max-bytes` the size each file rotates at.
+
 ## Checks
 
 ```sh
@@ -21,7 +23,7 @@ go vet ./...
 go test ./...
 ```
 
-These three are the gate; what they must cover is `SYSTEMS.md` (*Checks*). With no packages in the module yet, `go vet ./...` and `go test ./...` report `no packages to vet` and `no packages to test`.
+These three are the gate; what they must cover is `SYSTEMS.md` (*Checks*), and CI (`.github/workflows/checks.yml`) runs them.
 
 ## Documentation
 

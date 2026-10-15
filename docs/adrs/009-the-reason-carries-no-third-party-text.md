@@ -14,9 +14,3 @@ A wake is a reason: `hermes --profile <bot> chat -q "<reason>"`. That reason is 
 - The reason has a fixed shape per rule, so its wording is reviewed in this repository rather than assembled per delivery.
 - A title or a comment that is hostile, enormous or misleading costs the service nothing, because none of it reaches an argv.
 - The rule is checkable: a test runs the router over a fixture whose every text field is a sentinel value and asserts that no reason contains it.
-
-## Rejected
-
-- **Quoting the text that caused the wake.** Rejected: it is the one place third-party text would reach an agent with tools and credentials, and it buys only a sentence the agent can read for itself.
-- **Escaping and length-limiting the text instead.** Rejected: escaping is one more filter to get wrong, and it does not change what the argv holds.
-- **Leaving it to the reviewer.** Rejected: nothing in the documents forbade it, so nothing looked for it.

@@ -17,9 +17,3 @@ The binary is `cmd/dispatcher`, with the receiver, the board, the router and the
 - The whole surface is one route in and one request out, so there is nothing for a framework to do.
 - What it rules out: sharing code with the fleet's TypeScript monitors. A routing or dedup rule written here cannot be reused by the poll, so the two mechanisms are written twice while both exist. That is accepted because the poll is meant to disappear, and because the shared fact — the board and the card — is data, not code.
 - The cost is hand-rolling what a framework would supply: a mux, a middleware chain and a config loader. For one POST route that is a handful of lines, and it is code the reviewer can read in full.
-
-## Rejected
-
-- **TypeScript on Bun**, the runtime the fleet's monitors already use. Rejected because the service's whole job is HTTP, cryptography and concurrency — all of which are the standard library in Go — and because a compiled binary has no runtime left to keep alive between the host's boot and the gateway's. The monitors stay Bun: this decision is about the new service, not about the repository that carries the scripts.
-- **A web framework** (`chi`, `gin`, `echo`). Rejected as a dependency for behaviour `net/http` already has: one route, one method, no templates, no sessions, no middleware beyond authentication and logging.
-- **A serverless function.** Rejected because the service must reach the gateway on the host's loopback and read the board on every event whose payload is silent; it belongs where the gateway is.

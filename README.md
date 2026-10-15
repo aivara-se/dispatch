@@ -2,11 +2,9 @@
 
 The service that reads GitHub's deliveries for the `aivara-se` organisation and wakes the agents the board's state calls for, with the reason. It does not do the work: a wake says *why now*, and the agent re-reads the board and the pull request.
 
-**The design is settled and the code has not started.**
-
 ## Run it locally
 
-From the repository root, once `cmd/dispatcher` is written:
+From the repository root:
 
 ```sh
 go build ./cmd/dispatcher     # ./dispatcher, in the repository root
@@ -23,7 +21,7 @@ go vet ./...
 go test ./...
 ```
 
-Until the packages exist, `go vet ./...` and `go test ./...` exit 1 with `no packages to vet` and `no packages to test`; `go build ./...` is the pass this module has today.
+These three are the gate; what they must cover is `SYSTEMS.md` (*Checks*). With no packages in the module yet, `go vet ./...` and `go test ./...` report `no packages to vet` and `no packages to test`.
 
 ## Documentation
 

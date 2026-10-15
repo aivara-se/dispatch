@@ -23,7 +23,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 ## The state pass
 
-- The board is read in full — every card and its column — at boot, and again when a run the service started ends. A delivery is a third trigger, not the only one.
+- The board is read in full — every card and its column — at the three moments [`008`](adrs/008-the-service-acts-on-the-board.md) fixes, and never on a payload's say-so alone.
 - Each card is then asked the question `PRODUCT.md` (*The rule*) answers: what moves it forward, who does it, and is it already happening. The list there is the whole rule; this section is only where the state comes from.
 - **Is it already happening** is the service's own run table, held in memory and rebuilt at boot from the cards in `Started` and the processes it finds. The board cannot answer it: a review wake names an agent whose card never moves, and most runs a delivery starts belong to no card at all.
 - The pass writes the assignee and nothing else, and it does not repeat a wake. An action it has attempted for a card is attempted again when the card has changed since, or when that attempt never started a run — a wake that started nothing repairs nothing. **Unsettled** means a card whose next action the pass has not attempted since the card last changed, or whose attempt never started a run.
@@ -34,7 +34,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - The board is one GitHub project in the organisation; a card is an issue, and its column is the project's `Status` field.
 - Reading the board is GitHub's GraphQL API — the project-items query, one page at a time — and a card's column comes from it; reading one card for its assignee is the REST issue endpoint. Both use the board token, built once at boot; `ADR 005` names the surfaces and the sources behind them.
 - The write is one field: the assignee of the card the rule names. It is the issue's assignee, which is the field the project shows. The service moves no card, writes no comment and closes nothing.
-- A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused, and it is a person's to re-dispatch, not the sender's (*Failure modes*).
+- A read or a write that fails is an error, never a silent "nobody to wake": the delivery is refused, and the wake waits for the next look, not the sender's (*Failure modes*).
 
 ## Starting a run
 
@@ -42,7 +42,6 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 - **The mechanism**: the runner launches that profile's agent as a child process of the service — the Hermes CLI on the profile, `hermes --profile <bot> chat -q "<reason>"` — and tracks the child: running, exited, its exit code and its last output. The run is the profile's own: its prompt, skills, memory and delivery come from the profile, and the dispatcher adds only the reason.
 - **One run per agent**: the runner starts no second run for a profile that already has one, and the run table is what it reconciles against after a restart.
 - **The reason** is the run's input and nothing else: identifiers, and a sentence the service wrote. Text a third party wrote never reaches it (`ADR 009`), because the reason is an argument to a program that holds tools and credentials.
-- **The fallback**: where a profile's gateway must own the run and its delivery, the same wake is a signed POST to that profile's route on the gateway — `/webhooks/<route>`, or `/p/<profile>/webhooks/<route>` where the gateway multiplexes profiles — with the same `X-Hub-Signature-256` form GitHub uses. The run's lifetime is then the gateway's, and the service tracks it through the run table rather than through a child process.
 
 ## GitHub access
 
@@ -66,11 +65,11 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 
 - **A duplicate delivery** is answered from the cache; **an out-of-order one** is unaffected, because nothing orders events and every wake is a reason to re-read.
 - **A restart** loses the cache and the run table, not the audit log; the pass at boot re-reads the board.
-- **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason, and the delivery is refused. GitHub does not redeliver a failed delivery (*Handling failed webhook deliveries* and *Redelivering webhooks*, docs.github.com, read 2026-10-12): it keeps the delivery in its list for three days, where the operator re-dispatches it by hand, and the dead-letter file holds the same wake until they do. A refused wake is late, never lost.
+- **A run that cannot be started**, or **a board read or write that fails**, is retried a bounded number of times and then dead-lettered with its reason, and the delivery is refused. GitHub does not redeliver a failed delivery (*Handling failed webhook deliveries* and *Redelivering webhooks*, docs.github.com, read 2026-10-12): it keeps the delivery in its list for three days, and the dead-letter file holds the same wake. The next look repairs it — the card is still unsettled, so the pass attempts the wake again. A refused wake is late, never lost.
 - **A wrong signature or an oversized body** is refused before anything is parsed, and **an event that is not ours** is answered `202` and dropped.
 - **GitHub unreachable** — the board read fails and the delivery is refused rather than answered done; the service keeps no queue of its own and invents no ordering.
 
 ## Checks
 
-- The gate, which `#28` lands as a workflow, on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...`.
+- The gate runs on every pull request and on `main`: `gofmt -l .`, `go vet ./...` and `go test ./...` — by the reviewer until the workflow lands.
 - The layers those tests must cover, and the ones they cannot: the signature and the refusal before parsing, the dedup, the router's decision per payload fixture against a stubbed board, the assignee write, the pass over a fixture board at boot, the runner's start and its tracking, and one signed POST driven end to end. No test covers a real delivery through the live GitHub API or a real agent run; those are checked by hand on the host.

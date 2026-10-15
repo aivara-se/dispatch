@@ -11,12 +11,6 @@ Where a record or a document in this repository rests on the behaviour of someth
 ## Consequences
 
 - A claim with a source can be re-checked by the next reader; a claim without one is a belief that reads like a fact, and is re-derived from memory instead of re-read.
-- Each external claim costs one clause. Nothing else about a record changes: the decision, its consequences and its rejected alternatives are written as before.
+- Each external claim costs one clause. Nothing else about a record changes: the decision and its consequences are written as before.
 - A name is enough. What is wanted is where to look, not a transcription of what is there.
 - The record ages with its source: a Hermes or a GitHub upgrade can invalidate a claim, and the reader who can find the file is the one who can tell.
-
-## Rejected
-
-- **Leaving it to the reviewer.** It is how both wrong claims were caught, and it stops the moment the reviewer changes or is busy.
-- **Naming a version or a commit** instead of the source and the date. Rejected: it dates the claim without saying where to look, and reads as current long after it is not.
-- **No external claim in a record.** Rejected: the decisions that shape this service are mostly about how it relates to GitHub, the board and the Hermes runtime; a record that cannot state a dependency cannot record what it costs.

@@ -6,7 +6,7 @@ A wake is a **reason, not an instruction**: the service says *why now*, and the 
 
 ## The board
 
-One project, four columns. A card is added to the board by the operator or by an agent, and a pull request merges when the operator merges it: the two acts the service does not take.
+One project, four columns. A card reaches the board by the operator or by an agent: the one act the service does not take. A pull request merges when MaMa merges it, woken like any other agent.
 
 - `Backlog` — the operator's inbox, and MaMa's.
 - `Refined` — ready to build.
@@ -31,10 +31,10 @@ One question, asked of every card every time the service looks: **what moves thi
 - **`Started`** — nothing while its run is in flight. With no run started for it, its assignee, to finish or restart it.
 - **A review requested on a pull request** — the named reviewer.
 - **Changes requested on a pull request** — its author.
-- **A pull request approved and mergeable** — the merge is the operator's. *How the service reaches the operator is not decided.*
+- **A pull request approved and mergeable** — MaMa merges it.
 - **A pull request merged** — MaMa, for the cards it closed and the blockers it cleared.
 - **A pull request closed unmerged** — its author, to reopen or rework it.
-- **A card whose next step is the operator's** — the operator again. *The same undecided route.*
+- **A card whose next step needs the operator** — no wake; it waits for the operator's ticket, which MaMa links and moves.
 
 The service looks in three places and nowhere else: when a delivery arrives, when a run it started ends, and once at boot. Nothing else fires it — there is no clock.
 
@@ -54,6 +54,7 @@ The service looks in three places and nowhere else: when a delivery arrives, whe
 - Not a dependency resolver. MaMa reads the links between cards and works out what a `Finished` card unblocked; the service models no blockers.
 - Not a board writer beyond the assignee, and not a second source of truth.
 - Not a deployment step. A merge ends the card; what a merge deploys is the repository's own pipeline.
+- Not operator-operated. The operator's act ends at the Backlog inbox; every step after it is an agent's.
 
 ## Acceptance
 

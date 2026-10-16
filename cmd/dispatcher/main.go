@@ -138,27 +138,40 @@ type bridge struct {
 	owner   string
 	project int
 
-	repos map[int]string
+	repos     map[int]string
+	ambiguous map[int]string
 }
 
 // ReadAll reads the whole board — the surface the router gives as Reader —
-// and keeps where each card lives, so a write can reach it.
+// and keeps where each card lives, so a write can reach it. A number two
+// cards answer is kept, not resolved: the write refuses rather than picks a
+// repository the board did not name for the decision.
 func (b *bridge) ReadAll(ctx context.Context) ([]board.Card, error) {
 	cards, err := b.client.ReadAll(ctx, b.owner, b.project)
 	if err != nil {
 		return nil, err
 	}
 	repos := make(map[int]string, len(cards))
+	ambiguous := make(map[int]string)
 	for _, card := range cards {
+		if first, seen := repos[card.Number]; seen && first != card.Repo {
+			ambiguous[card.Number] = first
+		}
 		repos[card.Number] = card.Repo
 	}
-	b.repos = repos
+	b.repos, b.ambiguous = repos, ambiguous
 	return cards, nil
 }
 
 // Assign writes one card's assignee — the surface the router gives as
-// Writer — to the repository the read before it placed the card in.
+// Writer — to the repository the read before it placed the card in. A
+// number two cards answer goes to two issues' URLs, and the assignee is
+// written on one the board did not name: the write is refused instead.
 func (b *bridge) Assign(ctx context.Context, number int, login string) error {
+	if second, dup := b.ambiguous[number]; dup {
+		return fmt.Errorf("assign card %d: two cards on the project answer %d, %s and %s, so the repository to write is a guess",
+			number, number, second, b.repos[number])
+	}
 	repo, ok := b.repos[number]
 	if !ok {
 		return fmt.Errorf("assign card %d: no read placed it, so its repo is unknown", number)

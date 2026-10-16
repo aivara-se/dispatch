@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -132,7 +133,8 @@ func run(ctx context.Context, args []string) error {
 // look decides from, bound to the configuration's owner and project. A look
 // reads the board before it writes an assignee and the router serialises the
 // looks, so the card-to-repo map one read fills is the map the same look's
-// write consults.
+// write consults — each card's own repository, the owner the board named and
+// not the configured one.
 type bridge struct {
 	client  *board.Client
 	owner   string
@@ -164,9 +166,10 @@ func (b *bridge) ReadAll(ctx context.Context) ([]board.Card, error) {
 }
 
 // Assign writes one card's assignee — the surface the router gives as
-// Writer — to the repository the read before it placed the card in. A
-// number two cards answer goes to two issues' URLs, and the assignee is
-// written on one the board did not name: the write is refused instead.
+// Writer — to the repository the read before it placed the card in, the
+// repository the board named. A number two cards answer goes to two issues'
+// URLs, and the assignee is written on one the board did not name: the write
+// is refused instead.
 func (b *bridge) Assign(ctx context.Context, number int, login string) error {
 	if second, dup := b.ambiguous[number]; dup {
 		return fmt.Errorf("assign card %d: two cards on the project answer %d, %s and %s, so the repository to write is a guess",
@@ -176,7 +179,11 @@ func (b *bridge) Assign(ctx context.Context, number int, login string) error {
 	if !ok {
 		return fmt.Errorf("assign card %d: no read placed it, so its repo is unknown", number)
 	}
-	return b.client.Assign(ctx, b.owner, repo, number, login)
+	owner, name, named := strings.Cut(repo, "/")
+	if !named || owner == "" || name == "" {
+		return fmt.Errorf("assign card %d: the board named %q, which is not a repository's owner and name", number, repo)
+	}
+	return b.client.Assign(ctx, owner, name, number, login)
 }
 
 // fleet maps each agent's GitHub login to the Hermes profile their run uses,

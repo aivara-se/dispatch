@@ -1,8 +1,9 @@
 // Package board reads and writes the board: the GitHub project whose Status
 // field is each card's column, and the issues that are its cards. The whole
-// board is read with the GraphQL project-items query, one page at a time;
-// one card is read, and its assignee written, with the REST issue endpoint,
-// which answers an issue and a pull request alike.
+// board is read with the GraphQL project-items query, one page at a time —
+// each card with its column, its holder and the repository it lives in —
+// and a card's assignee is written with the REST issue endpoint, which
+// answers an issue and a pull request alike.
 package board
 
 import (
@@ -15,8 +16,10 @@ import (
 
 // Card is one card on the board: the issue's number, the column the
 // project's Status field reports, the login that holds it, and the
-// repository the issue lives in — the address each REST surface is built
-// against. Column and Assignee are empty when the card has none.
+// repository the issue lives in, as `owner/name` — the address each REST
+// surface is built against, and the identity a number alone is not, an
+// issue's number being the issue's repository's own. Column and Assignee
+// are empty when the card has none.
 type Card struct {
 	Number   int
 	Column   string
@@ -151,7 +154,7 @@ const projectQuery = `query($owner: String!, $number: Int!, $cursor: String) {
           content {
             ... on Issue {
               number
-              repository { name }
+              repository { nameWithOwner }
               assignees(first: 1) {
                 nodes {
                   login
@@ -160,7 +163,7 @@ const projectQuery = `query($owner: String!, $number: Int!, $cursor: String) {
             }
             ... on PullRequest {
               number
-              repository { name }
+              repository { nameWithOwner }
               assignees(first: 1) {
                 nodes {
                   login
@@ -227,12 +230,12 @@ func (c *Client) projectPage(ctx context.Context, owner string, project int, cur
 		if node.Content.Number == 0 {
 			continue
 		}
-		if node.Content.Repository.Name == "" {
+		if node.Content.Repository.NameWithOwner == "" {
 			return nil, "", fmt.Errorf("read board: card %d names no repository", node.Content.Number)
 		}
 		card := Card{
 			Number: node.Content.Number,
-			Repo:   node.Content.Repository.Name,
+			Repo:   node.Content.Repository.NameWithOwner,
 		}
 		if len(node.Content.Assignees.Nodes) > 0 {
 			card.Assignee = node.Content.Assignees.Nodes[0].Login
@@ -270,7 +273,7 @@ type graphqlPage struct {
 						Content struct {
 							Number     int `json:"number"`
 							Repository struct {
-								Name string `json:"name"`
+								NameWithOwner string `json:"nameWithOwner"`
 							} `json:"repository"`
 							Assignees struct {
 								Nodes []struct {

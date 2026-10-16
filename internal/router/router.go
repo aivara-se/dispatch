@@ -2,7 +2,12 @@
 // card the rule PRODUCT.md fixes — what moves it forward, who does it, and
 // is it already happening — and starts the runs the rule calls for, one per
 // agent per look, at the lowest-numbered card that names it and whose claim
-// lands.
+// lands, the number first and the repository's name after it.
+//
+// A card below the board read is its repository and its number: an issue's
+// number is the issue's repository's own, so one project answers one number
+// with more than one card, and the pair is what every record and every write
+// the pass names.
 //
 // It looks in three places and nowhere else: a delivery arrives, a run ends,
 // and once at boot. The looks run one at a time behind one mutex, so two
@@ -30,16 +35,19 @@ import (
 
 // Reader is the read half of the board the pass decides from: the whole
 // project read, every card with its column and its assignee. The board's
-// order is its own; the claim sorts what the rule names by card number.
+// order is its own; the claim sorts what the rule names by the pair.
 type Reader interface {
 	ReadAll(ctx context.Context) ([]board.Card, error)
 }
 
 // Writer is the write half: the one field the service writes anywhere, the
-// assignee of a card. A write happens before the run it prepares, so the
-// board shows the claim even when the run fails to start.
+// assignee of a card. The card is named below the read, by its repository
+// and its number: the repository is the one the board named for the card the
+// rule decided on, so a number two cards answer is written at the right one
+// of them. A write happens before the run it prepares, so the board shows
+// the claim even when the run fails to start.
 type Writer interface {
-	Assign(ctx context.Context, number int, login string) error
+	Assign(ctx context.Context, repo string, number int, login string) error
 }
 
 // Runner is the run table the pass asks whether a run is in flight, and
@@ -58,6 +66,26 @@ type Logger interface {
 	Dead(audit.Miss) error
 }
 
+// identity is a card below the board read: the repository the board named and
+// the issue's number, the pair that tells two cards of one project apart. The
+// pass keys every per-card record by it, orders the rule's names by it, and
+// writes it into every line it leaves behind.
+type identity struct {
+	repo   string
+	number int
+}
+
+// ident is the identity of one card the read gave the pass.
+func ident(card board.Card) identity {
+	return identity{repo: card.Repo, number: card.Number}
+}
+
+// String is how one card's identity reads in the service's own words: the
+// repository the board named, then the issue's number.
+func (c identity) String() string {
+	return fmt.Sprintf("%s#%d", c.repo, c.number)
+}
+
 // Router runs the passes. It holds no state of the board's: the board read
 // is the decision's input and the assignee write is its record, and what
 // lives between looks is only which action was attempted and whether it
@@ -70,7 +98,7 @@ type Router struct {
 	login  map[string]string // GitHub login to the Hermes profile the run uses
 
 	mu        sync.Mutex
-	attempted map[int]attempt
+	attempted map[identity]attempt
 	now       func() time.Time
 }
 
@@ -90,7 +118,7 @@ func New(reader Reader, writer Writer, runner Runner, log Logger, login map[stri
 		runner:    runner,
 		log:       log,
 		login:     login,
-		attempted: make(map[int]attempt),
+		attempted: make(map[identity]attempt),
 		now:       time.Now,
 	}, nil
 }
@@ -231,10 +259,11 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 	// The claims run in rounds: a round hands every agent it has room for
 	// one card, and an agent whose write the board refused keeps its slot
 	// for the next round, which claims the next card naming it. A card
-	// claimed once is never claimed again in the same look.
+	// claimed once is never claimed again in the same look, and a card is
+	// its identity: two cards answering one number are two cards.
 	asks := r.needs(cards, at)
-	decided := make(map[string]bool) // the profiles this look has served
-	claimed := make(map[int]bool)    // the cards this look has claimed
+	decided := make(map[string]bool)   // the profiles this look has served
+	claimed := make(map[identity]bool) // the cards this look has claimed
 	for {
 		wakes := r.claim(asks, held, decided, claimed, at)
 		if len(wakes) == 0 {
@@ -242,9 +271,9 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 		}
 		for _, w := range wakes {
 			call := w
-			claimed[call.card.Number] = true
+			claimed[ident(call.card)] = true
 			if call.write {
-				if err := tryOnce(func() error { return r.writer.Assign(ctx, call.card.Number, call.login) }); err != nil {
+				if err := tryOnce(func() error { return r.writer.Assign(ctx, call.card.Repo, call.card.Number, call.login) }); err != nil {
 					failed = true
 					// The write is the claim, and it was refused: the card
 					// stays unclaimed, so this agent's one wake for the look
@@ -252,7 +281,7 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 					// claimed in this same look, and this card's retry is the
 					// next look.
 					delete(decided, call.profile)
-					r.fail(trigger, deliveries, fmt.Errorf("assign card %d: %w", call.card.Number, err), call.card.Number, call.login)
+					r.fail(trigger, deliveries, fmt.Errorf("assign card %s: %w", ident(call.card), err), call.card.Number, call.login)
 					continue
 				}
 			}
@@ -262,17 +291,17 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 				// The claim was written and the run never went: the record says
 				// so, and the next look restarts the run instead of deciding
 				// the card again — the write is not repeated.
-				r.attempted[call.card.Number] = attempt{column: call.card.Column, assignee: call.login, ran: false}
-				r.fail(trigger, deliveries, fmt.Errorf("start the run for %s: %w", call.profile, err), call.card.Number, call.login)
+				r.attempted[ident(call.card)] = attempt{column: call.card.Column, assignee: call.login, ran: false}
+				r.fail(trigger, deliveries, fmt.Errorf("start the run for %s on card %s: %w", call.profile, ident(call.card), err), call.card.Number, call.login)
 				continue
 			}
 			// The claim is recorded on the state the pass leaves behind: the
 			// column it read, the assignee it wrote, and that the run went.
-			r.attempted[call.card.Number] = attempt{column: call.card.Column, assignee: call.login, ran: true}
+			r.attempted[ident(call.card)] = attempt{column: call.card.Column, assignee: call.login, ran: true}
 			woke = append(woke, audit.Line{
 				Trigger:    trigger,
 				Deliveries: deliveries,
-				Decision:   fmt.Sprintf("woke %s for card %d", call.profile, call.card.Number),
+				Decision:   fmt.Sprintf("woke %s for card %s", call.profile, ident(call.card)),
 				Card:       call.card.Number,
 				Assignee:   call.login,
 				Run:        run,
@@ -323,7 +352,7 @@ func (r *Router) needs(cards []board.Card, at time.Time) []need {
 // action the pass took and left unfinished is attempted again before the
 // rules decide.
 func (r *Router) request(card board.Card, at time.Time) (need, bool) {
-	if old, kept := r.attempted[card.Number]; kept && old.column == card.Column && old.assignee == card.Assignee {
+	if old, kept := r.attempted[ident(card)]; kept && old.column == card.Column && old.assignee == card.Assignee {
 		if old.ran {
 			// The wake ran and the card has not changed since: the action
 			// has been already started, and a card its agent has been given
@@ -358,20 +387,24 @@ func (r *Router) request(card board.Card, at time.Time) (need, bool) {
 }
 
 // claim turns the rule's names into wakes: at most one per agent per look,
-// the lowest-numbered card that names it, and never for a profile with a
-// run in flight. decided is the profiles this look has already served and
-// claimed the cards it has already claimed; the look owns both. A profile
-// whose claim the board refused is deleted from decided by the look that
-// refused it, so the next card naming that agent is claimed in the same
-// look. The pass writes no claim for an agent it cannot start — the cards
-// it skips stay unclaimed, and the next look finds them.
-func (r *Router) claim(asks []need, held map[string]bool, decided map[string]bool, claimed map[int]bool, at time.Time) []wake {
+// the lowest-numbered card that names it — the number first, the
+// repository's name after it — and never for a profile with a run in flight.
+// decided is the profiles this look has already served and claimed the
+// identities it has already claimed; the look owns both. A profile whose
+// claim the board refused is deleted from decided by the look that refused
+// it, so the next card naming that agent is claimed in the same look. The
+// pass writes no claim for an agent it cannot start — the cards it skips stay
+// unclaimed, and the next look finds them.
+func (r *Router) claim(asks []need, held map[string]bool, decided map[string]bool, claimed map[identity]bool, at time.Time) []wake {
 	sort.SliceStable(asks, func(i, j int) bool {
-		return asks[i].card.Number < asks[j].card.Number
+		if asks[i].card.Number != asks[j].card.Number {
+			return asks[i].card.Number < asks[j].card.Number
+		}
+		return asks[i].card.Repo < asks[j].card.Repo
 	})
 	var wakes []wake
 	for _, ask := range asks {
-		if claimed[ask.card.Number] {
+		if claimed[ident(ask.card)] {
 			continue
 		}
 		switch ask.kind {
@@ -384,7 +417,7 @@ func (r *Router) claim(asks []need, held map[string]bool, decided map[string]boo
 			wakes = append(wakes, wake{
 				profile: refinerProfile,
 				login:   login,
-				reason:  reasonBacklog(ask.card.Number, at),
+				reason:  reasonBacklog(ident(ask.card), at),
 				write:   true,
 				card:    ask.card,
 			})
@@ -397,7 +430,7 @@ func (r *Router) claim(asks []need, held map[string]bool, decided map[string]boo
 			wakes = append(wakes, wake{
 				profile: profile,
 				login:   login,
-				reason:  reasonRefined(ask.card.Number, at),
+				reason:  reasonRefined(ident(ask.card), at),
 				write:   true,
 				card:    ask.card,
 			})
@@ -412,7 +445,7 @@ func (r *Router) claim(asks []need, held map[string]bool, decided map[string]boo
 			wakes = append(wakes, wake{
 				profile: profile,
 				login:   ask.login,
-				reason:  reasonStarted(ask.card.Number, at),
+				reason:  reasonStarted(ident(ask.card), at),
 				write:   false,
 				card:    ask.card,
 			})
@@ -425,7 +458,7 @@ func (r *Router) claim(asks []need, held map[string]bool, decided map[string]boo
 			wakes = append(wakes, wake{
 				profile: profile,
 				login:   ask.login,
-				reason:  reasonFor(ask.card.Column, ask.card.Number, at),
+				reason:  reasonFor(ask.card.Column, ident(ask.card), at),
 				write:   false,
 				card:    ask.card,
 			})
@@ -465,7 +498,7 @@ func (r *Router) loginOf(profile string) (string, bool) {
 
 // reasonFor is the fixed reason of the rule a column's wake answers; a
 // repair reuses it, because the state it repairs is the same one.
-func reasonFor(column string, card int, at time.Time) string {
+func reasonFor(column string, card identity, at time.Time) string {
 	switch column {
 	case "Backlog":
 		return reasonBacklog(card, at)
@@ -483,18 +516,18 @@ func reasonFor(column string, card int, at time.Time) string {
 // one: the audit line carries the delivery, the reason carries the card.
 
 // reasonBacklog is the reason a Backlog card's refiner is woken with.
-func reasonBacklog(card int, at time.Time) string {
-	return fmt.Sprintf("card %d sits in Backlog with nobody holding it; refine it; looked at %s", card, at.Format(time.RFC3339))
+func reasonBacklog(card identity, at time.Time) string {
+	return fmt.Sprintf("card %s sits in Backlog with nobody holding it; refine it; looked at %s", card, at.Format(time.RFC3339))
 }
 
 // reasonRefined is the reason a Refined card's developer is woken with.
-func reasonRefined(card int, at time.Time) string {
-	return fmt.Sprintf("card %d sits in Refined with nobody holding it; build it; looked at %s", card, at.Format(time.RFC3339))
+func reasonRefined(card identity, at time.Time) string {
+	return fmt.Sprintf("card %s sits in Refined with nobody holding it; build it; looked at %s", card, at.Format(time.RFC3339))
 }
 
 // reasonStarted is the reason a Started card's assignee is woken with.
-func reasonStarted(card int, at time.Time) string {
-	return fmt.Sprintf("card %d sits in Started with no run in flight; finish or restart it; looked at %s", card, at.Format(time.RFC3339))
+func reasonStarted(card identity, at time.Time) string {
+	return fmt.Sprintf("card %s sits in Started with no run in flight; finish or restart it; looked at %s", card, at.Format(time.RFC3339))
 }
 
 // tryRead reads the board, up to attempts times, and reports the last

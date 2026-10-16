@@ -23,6 +23,33 @@ var fleet = map[string]string{
 	"thani-sh-mimi": "mimi",
 }
 
+// The two repositories the fixtures' cards live in. A card below the board
+// read is its repository and its number, the pass carries the pair, and one
+// project can answer one number with a card in each — so a fixture that means
+// two cards of one number names both repositories.
+const (
+	repo      = "aivara-se/dispatcher"
+	otherRepo = "mnmtanish/dispatcher"
+)
+
+// card is one fixture card, seated in the fixture's own repository: the
+// fixtures that hold two cards of one number build their second card by hand.
+func card(number int, column, assignee string) board.Card {
+	return board.Card{Number: number, Column: column, Assignee: assignee, Repo: repo}
+}
+
+// at is one card's identity as the pass names it: the repository the board
+// gave and the issue's number.
+func at(repo string, number int) string {
+	return fmt.Sprintf("%s#%d", repo, number)
+}
+
+// id is the identity of one fixture card of the fixture's own repository:
+// the pair the pass keys its records by and hands a run in the reason.
+func id(number int) identity {
+	return identity{repo: repo, number: number}
+}
+
 // lookedAt is the one moment the pass's clock returns, so every reason the
 // tests see is an exact string compared by equality, not by containment.
 var lookedAt = time.Date(2026, 10, 16, 6, 46, 33, 0, time.UTC)
@@ -63,7 +90,7 @@ type stubBoard struct {
 	failReads    int
 	readAttempts int
 	failWrites   int
-	refuses      map[int]bool // the numbers the board refuses to write: two cards answer them
+	refuses      map[identity]bool // the cards the board refuses to write
 	assigns      []string
 }
 
@@ -83,20 +110,20 @@ func (b *stubBoard) ReadAll(ctx context.Context) ([]board.Card, error) {
 	return cards, nil
 }
 
-func (b *stubBoard) Assign(ctx context.Context, number int, login string) error {
-	b.ops.take(fmt.Sprintf("assign %d %s", number, login))
+func (b *stubBoard) Assign(ctx context.Context, repo string, number int, login string) error {
+	b.ops.take("assign " + at(repo, number) + " " + login)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.refuses[number] {
-		return fmt.Errorf("card %d is answered by two cards, so the repository to write is a guess", number)
+	if b.refuses[identity{repo: repo, number: number}] {
+		return fmt.Errorf("card %s is refused by the board", at(repo, number))
 	}
 	if b.failWrites > 0 {
 		b.failWrites--
 		return errors.New("the endpoint answered 500")
 	}
-	b.assigns = append(b.assigns, fmt.Sprintf("%d %s", number, login))
+	b.assigns = append(b.assigns, at(repo, number)+" "+login)
 	for i, card := range b.cards {
-		if card.Number == number {
+		if card.Number == number && card.Repo == repo {
 			b.cards[i].Assignee = login
 		}
 	}
@@ -238,23 +265,23 @@ func TestAFleetWithTheRefinerAndOneBuilderServes(t *testing.T) {
 
 func TestABacklogCardWakesItsRefinerOncePerLook(t *testing.T) {
 	router, _, runner, stub, track := boot(t, []board.Card{
-		{Number: 5, Column: "Backlog"},
-		{Number: 8, Column: "Backlog"},
+		card(5, "Backlog", ""),
+		card(8, "Backlog", ""),
 	})
 	router.OnBoot(context.Background())
 
 	if !reflect.DeepEqual(track.list, []string{
-		"assign 5 thani-sh-mama", // the write, before the run it prepares
-		"start mama",             // one run per agent per look, the lowest-numbered card
+		"assign " + at(repo, 5) + " thani-sh-mama", // the write, before the run it prepares
+		"start mama", // one run per agent per look, the lowest-numbered card
 	}) {
 		t.Fatalf("the look took %v", track.list)
 	}
-	if got, want := runner.started[0].reason, reasonBacklog(5, lookedAt); got != want {
+	if got, want := runner.started[0].reason, reasonBacklog(id(5), lookedAt); got != want {
 		t.Errorf("the reason was %q, want %q", got, want)
 	}
 	wantLine := audit.Line{
 		Trigger:  "boot",
-		Decision: "woke mama for card 5",
+		Decision: "woke mama for card " + at(repo, 5),
 		Card:     5,
 		Assignee: "thani-sh-mama",
 		Run:      "mama-run-1",
@@ -269,7 +296,7 @@ func TestABacklogCardWakesItsRefinerOncePerLook(t *testing.T) {
 }
 
 func TestADeliveryIsAnsweredOnTheLook(t *testing.T) {
-	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{card(72, "Refined", "")})
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
 	if code != http.StatusAccepted {
 		t.Fatalf("delivered %d, want 202", code)
@@ -277,7 +304,7 @@ func TestADeliveryIsAnsweredOnTheLook(t *testing.T) {
 	wantLine := audit.Line{
 		Trigger:    "delivery",
 		Deliveries: []string{"d-72"},
-		Decision:   "woke meme for card 72",
+		Decision:   "woke meme for card " + at(repo, 72),
 		Card:       72,
 		Assignee:   "thani-sh-meme",
 		Run:        "meme-run-1",
@@ -287,19 +314,19 @@ func TestADeliveryIsAnsweredOnTheLook(t *testing.T) {
 	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
 		t.Errorf("the log read as %+v, want %+v", got, []audit.Line{wantLine})
 	}
-	if len(runner.started) != 1 || runner.started[0].reason != reasonRefined(72, lookedAt) {
+	if len(runner.started) != 1 || runner.started[0].reason != reasonRefined(id(72), lookedAt) {
 		t.Errorf("the look started %+v, want one run with the refined card's reason", runner.started)
 	}
 }
 
 func TestRefinedCardsGoToAFreeDeveloperEach(t *testing.T) {
 	router, board, runner, _, _ := boot(t, []board.Card{
-		{Number: 80, Column: "Refined"},
-		{Number: 81, Column: "Refined"},
+		card(80, "Refined", ""),
+		card(81, "Refined", ""),
 	})
 	router.OnBoot(context.Background())
 
-	if got := board.assigns; !reflect.DeepEqual(got, []string{"80 thani-sh-meme", "81 thani-sh-mimi"}) {
+	if got := board.assigns; !reflect.DeepEqual(got, []string{at(repo, 80) + " thani-sh-meme", at(repo, 81) + " thani-sh-mimi"}) {
 		t.Errorf("the claims were %v, want the free developers one card each", got)
 	}
 	if len(runner.started) != 2 {
@@ -309,13 +336,13 @@ func TestRefinedCardsGoToAFreeDeveloperEach(t *testing.T) {
 
 func TestAFinishedCardIsNoDevelopersHold(t *testing.T) {
 	router, board, runner, _, _ := boot(t, []board.Card{
-		{Number: 69, Column: "Finished", Assignee: "thani-sh-meme"},
-		{Number: 70, Column: "Finished", Assignee: "thani-sh-mimi"},
-		{Number: 71, Column: "Finished", Assignee: "thani-sh-meme"},
-		{Number: 100, Column: "Refined"},
+		card(69, "Finished", "thani-sh-meme"),
+		card(70, "Finished", "thani-sh-mimi"),
+		card(71, "Finished", "thani-sh-meme"),
+		card(100, "Refined", ""),
 	})
 	router.OnBoot(context.Background())
-	if got := board.assigns; !reflect.DeepEqual(got, []string{"100 thani-sh-meme"}) {
+	if got := board.assigns; !reflect.DeepEqual(got, []string{at(repo, 100) + " thani-sh-meme"}) {
 		t.Errorf("the claims were %v, want meme's claim on card 100", got)
 	}
 	if len(runner.started) != 1 || runner.started[0].profile != "meme" {
@@ -325,9 +352,9 @@ func TestAFinishedCardIsNoDevelopersHold(t *testing.T) {
 
 func TestARefinedCardWaitsWhenNoDeveloperIsFree(t *testing.T) {
 	router, board, runner, stub, _ := boot(t, []board.Card{
-		{Number: 80, Column: "Refined"},
-		{Number: 81, Column: "Started", Assignee: "thani-sh-meme"},
-		{Number: 82, Column: "Started", Assignee: "thani-sh-mimi"},
+		card(80, "Refined", ""),
+		card(81, "Started", "thani-sh-meme"),
+		card(82, "Started", "thani-sh-mimi"),
 	})
 	runner.running["meme"] = true
 	runner.running["mimi"] = true
@@ -345,8 +372,8 @@ func TestARefinedCardWaitsWhenNoDeveloperIsFree(t *testing.T) {
 
 func TestARunEndHandsTheFreeDeveloperTheNextCard(t *testing.T) {
 	router, _, runner, _, _ := boot(t, []board.Card{
-		{Number: 90, Column: "Refined"},
-		{Number: 91, Column: "Started", Assignee: "thani-sh-mimi"},
+		card(90, "Refined", ""),
+		card(91, "Started", "thani-sh-mimi"),
 	})
 	runner.running["mimi"] = true // her run is in flight; her card waits with her
 	router.OnBoot(context.Background())
@@ -355,11 +382,11 @@ func TestARunEndHandsTheFreeDeveloperTheNextCard(t *testing.T) {
 	}
 
 	relook, board, runner, _, _ := boot(t, []board.Card{
-		{Number: 90, Column: "Refined", Assignee: "thani-sh-meme"},
-		{Number: 91, Column: "Refined"}, // mimi's hold ended with her run
+		card(90, "Refined", "thani-sh-meme"),
+		card(91, "Refined", ""), // mimi's hold ended with her run
 	})
 	relook.OnRunEnd(context.Background(), "mimi")
-	if got := board.assigns; !reflect.DeepEqual(got, []string{"91 thani-sh-mimi"}) {
+	if got := board.assigns; !reflect.DeepEqual(got, []string{at(repo, 91) + " thani-sh-mimi"}) {
 		t.Errorf("the run-end look wrote %v, want only card 91's claim", got)
 	}
 	if len(runner.started) != 1 || runner.started[0].profile != "mimi" {
@@ -368,7 +395,7 @@ func TestARunEndHandsTheFreeDeveloperTheNextCard(t *testing.T) {
 }
 
 func TestAStartedCardWaitsWhileItsRunIsInFlight(t *testing.T) {
-	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{card(9, "Started", "thani-sh-meme")})
 	runner.running["meme"] = true
 	router.OnBoot(context.Background())
 	if len(runner.started) != 0 {
@@ -380,7 +407,7 @@ func TestAStartedCardWaitsWhileItsRunIsInFlight(t *testing.T) {
 }
 
 func TestAStartedCardIsWokenExactlyOnceForItsState(t *testing.T) {
-	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{card(9, "Started", "thani-sh-meme")})
 	if code := router.OnDelivery(context.Background(), delivery("d-0")); code != http.StatusAccepted {
 		t.Fatalf("first look answered %d, want 202", code)
 	}
@@ -406,21 +433,74 @@ func TestAStartedCardIsWokenExactlyOnceForItsState(t *testing.T) {
 }
 
 func TestAStartedCardAtBootStartsTheRunItsClaimPromises(t *testing.T) {
-	router, _, _, _, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	router, _, _, _, _ := boot(t, []board.Card{card(9, "Started", "thani-sh-meme")})
 	router.OnBoot(context.Background()) // the run went; the agent left the card where it was
 
-	reboot, _, runner, _, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	reboot, _, runner, _, _ := boot(t, []board.Card{card(9, "Started", "thani-sh-meme")})
 	reboot.OnBoot(context.Background())
-	if len(runner.started) != 1 || runner.started[0].reason != reasonStarted(9, lookedAt) {
+	if len(runner.started) != 1 || runner.started[0].reason != reasonStarted(id(9), lookedAt) {
 		t.Errorf("the boot look started %+v, want its agent restarted for the unkept promise", runner.started)
 	}
 }
 
+// TestTwoCardsOfOneNumberAreEachWokenForTheirOwnState pins the pass's
+// per-card action memory: two cards of one number, in two repositories,
+// sitting in the same column and held by the same agent, are two cards. The
+// pair differs in nothing the memory's equality reads but its repository, so
+// a key of the number alone makes the first card's record answer for the
+// second — the second is never reached, and the silent class this card
+// exists to remove is back under a green gate.
+func TestTwoCardsOfOneNumberAreEachWokenForTheirOwnState(t *testing.T) {
+	router, _, runner, _, _ := boot(t, []board.Card{
+		card(9, "Started", "thani-sh-meme"),
+		{Number: 9, Column: "Started", Assignee: "thani-sh-meme", Repo: otherRepo},
+	})
+
+	router.OnBoot(context.Background())
+	if len(runner.started) != 1 || runner.started[0].reason != reasonStarted(id(9), lookedAt) {
+		t.Fatalf("the boot look started %+v, want one run, for the pair's lowest card", runner.started)
+	}
+
+	// The boot look's run has ended: the agent is free again, and the card
+	// its memory does not hold is the one the next look reaches.
+	delete(runner.running, "meme")
+	router.OnRunEnd(context.Background(), "meme")
+
+	if len(runner.started) != 2 {
+		t.Fatalf("the pair started %d runs, want two: one card of a number does not stand for both", len(runner.started))
+	}
+	if got, want := runner.started[1].reason, reasonStarted(identity{repo: otherRepo, number: 9}, lookedAt); got != want {
+		t.Errorf("the second run's reason was %q, want %q", got, want)
+	}
+}
+
+// TestTwoCardsOfOneNumberAreOrderedByThePair pins the claim's order: two
+// cards answering one number are decided the same way on every look — the
+// number first, the repository's name after it — whatever order the read
+// gave them. The fixture answers the pair with the higher repository first,
+// so a comparison on the number alone keeps the read's order and hands the
+// one wake to the other card.
+func TestTwoCardsOfOneNumberAreOrderedByThePair(t *testing.T) {
+	router, board, runner, _, _ := boot(t, []board.Card{
+		{Number: 9, Column: "Backlog", Repo: otherRepo},
+		card(9, "Backlog", ""),
+	})
+
+	router.OnBoot(context.Background())
+
+	if got := board.assigns; !reflect.DeepEqual(got, []string{at(repo, 9) + " thani-sh-mama"}) {
+		t.Errorf("the claim was %v, want the pair's lower repository first", got)
+	}
+	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(id(9), lookedAt) {
+		t.Errorf("the look started %+v, want one run, for the pair's lower repository", runner.started)
+	}
+}
+
 func TestARestartRepeatsNoClaimTheBoardCarries(t *testing.T) {
-	router, _, _, _, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
+	router, _, _, _, _ := boot(t, []board.Card{card(72, "Refined", "")})
 	router.OnBoot(context.Background()) // meme is claimed, and the claim is on the board
 
-	reboot, board, runner, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined", Assignee: "thani-sh-meme"}})
+	reboot, board, runner, stub, _ := boot(t, []board.Card{card(72, "Refined", "thani-sh-meme")})
 	reboot.OnBoot(context.Background())
 	if len(board.assigns) != 0 {
 		t.Errorf("the boot look rewrote %+v, want the claim the board already carries", board.assigns)
@@ -434,18 +514,18 @@ func TestARestartRepeatsNoClaimTheBoardCarries(t *testing.T) {
 }
 
 func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
-	router, _, runner, stub, track := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
+	router, _, runner, stub, track := boot(t, []board.Card{card(72, "Refined", "")})
 	runner.failStarts = attempts // every try fails, so the first look drops its wake
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
 	if code != http.StatusBadGateway {
 		t.Fatalf("the dropped wake answered %d, want 502", code)
 	}
-	if got := track.count("assign 72"); got != 1 {
+	if got := track.count("assign " + at(repo, 72)); got != 1 {
 		t.Errorf("the write happened %d times, want once", got)
 	}
 	want := audit.Miss{
-		Reason: "start the run for meme: the child would not start",
+		Reason: "start the run for meme on card " + at(repo, 72) + ": the child would not start",
 		Line: audit.Line{
 			Trigger:    "delivery",
 			Deliveries: []string{"d-72"},
@@ -463,10 +543,10 @@ func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
 	if code != http.StatusAccepted {
 		t.Fatalf("the repaired wake answered %d, want 202", code)
 	}
-	if got := track.count("assign 72"); got != 1 {
+	if got := track.count("assign " + at(repo, 72)); got != 1 {
 		t.Errorf("the repair rewrote the claim: %d writes", got)
 	}
-	if len(runner.started) != 1 || runner.started[0].reason != reasonRefined(72, lookedAt) {
+	if len(runner.started) != 1 || runner.started[0].reason != reasonRefined(id(72), lookedAt) {
 		t.Errorf("the look started %+v, want the run that repairs the card", runner.started)
 	}
 	if len(stub.misses) != 1 {
@@ -475,7 +555,7 @@ func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
 }
 
 func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
-	router, board, _, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
+	router, board, _, stub, _ := boot(t, []board.Card{card(72, "Refined", "")})
 	board.failWrites = attempts // both tries fail
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
@@ -485,7 +565,7 @@ func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
 	if got := len(stub.misses); got != 1 {
 		t.Fatalf("the look wrote %d misses, want one", got)
 	}
-	if got := stub.misses[0]; !strings.HasPrefix(got.Reason, "assign card 72:") {
+	if got := stub.misses[0]; !strings.HasPrefix(got.Reason, "assign card "+at(repo, 72)+":") {
 		t.Errorf("the miss said %q, want the failed assign named", got.Reason)
 	}
 	code = router.OnDelivery(context.Background(), delivery("d-73"))
@@ -498,44 +578,46 @@ func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
 // one wake per agent per look have to keep together: the card whose claim the
 // board refused stays unclaimed and is dead-lettered, and the agent's one wake
 // goes to the next card naming it, in that same look — so a card the pass can
-// never claim stops no card behind it.
+// never claim stops no card behind it. The two cards answer one number in two
+// repositories, and the card behind the refusal is reached in that same look
+// because a card is its identity, not its number.
 func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
 	router, board, runner, stub, track := boot(t, []board.Card{
-		{Number: 9, Column: "Backlog"},
-		{Number: 12, Column: "Backlog"},
+		card(9, "Backlog", ""),
+		{Number: 9, Column: "Backlog", Repo: otherRepo},
 	})
-	board.refuses = map[int]bool{9: true}
+	board.refuses = map[identity]bool{{repo: repo, number: 9}: true}
 
 	code := router.OnDelivery(context.Background(), delivery("d-9"))
 	if code != http.StatusBadGateway {
 		t.Errorf("a look whose claim was refused answered %d, want 502", code)
 	}
 	want := []string{
-		"assign 9 thani-sh-mama", // the refused claim: one try and its retry
-		"assign 9 thani-sh-mama",
-		"assign 12 thani-sh-mama", // the same look's next card naming the agent
+		"assign " + at(repo, 9) + " thani-sh-mama", // the refused claim: one try and its retry
+		"assign " + at(repo, 9) + " thani-sh-mama",
+		"assign " + at(otherRepo, 9) + " thani-sh-mama", // the card behind it, same look
 		"start mama",
 	}
 	if got := track.list; !reflect.DeepEqual(got, want) {
 		t.Errorf("the look took %v, want %v", got, want)
 	}
-	if got := board.assigns; !reflect.DeepEqual(got, []string{"12 thani-sh-mama"}) {
+	if got := board.assigns; !reflect.DeepEqual(got, []string{at(otherRepo, 9) + " thani-sh-mama"}) {
 		t.Errorf("the look wrote %v, want the card behind the refusal claimed", got)
 	}
-	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(12, lookedAt) {
-		t.Errorf("the look started %+v, want one run, concerning card 12", runner.started)
+	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(identity{repo: otherRepo, number: 9}, lookedAt) {
+		t.Errorf("the look started %+v, want one run, concerning the card the claim landed on", runner.started)
 	}
 	if len(stub.misses) != 1 {
 		t.Fatalf("the look dead-lettered %+v, want one miss: the refused claim", stub.misses)
 	}
-	if got := stub.misses[0]; got.Line.Card != 9 || !strings.HasPrefix(got.Reason, "assign card 9:") {
-		t.Errorf("the miss read as %+v, want card 9's refused claim", got)
+	if got := stub.misses[0]; got.Line.Card != 9 || !strings.HasPrefix(got.Reason, "assign card "+at(repo, 9)+":") {
+		t.Errorf("the miss read as %+v, want the claim the board refused", got)
 	}
 	wantLine := audit.Line{
 		Trigger:    "delivery",
 		Deliveries: []string{"d-9"},
-		Decision:   "woke mama for card 12",
-		Card:       12,
+		Decision:   "woke mama for card " + at(otherRepo, 9),
+		Card:       9,
 		Assignee:   "thani-sh-mama",
 		Run:        "mama-run-1",
 		Session:    "mama-session-1",
@@ -552,33 +634,33 @@ func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
 // defers a card, it never stops the board.
 func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
 	router, first, runner, _, _ := boot(t, []board.Card{
-		{Number: 5, Column: "Backlog"},
-		{Number: 9, Column: "Backlog"},
-		{Number: 12, Column: "Backlog"},
+		card(5, "Backlog", ""),
+		card(9, "Backlog", ""),
+		card(12, "Backlog", ""),
 	})
-	first.refuses = map[int]bool{9: true}
+	first.refuses = map[identity]bool{{repo: repo, number: 9}: true}
 
 	router.OnBoot(context.Background())
-	if got := first.assigns; !reflect.DeepEqual(got, []string{"5 thani-sh-mama"}) {
+	if got := first.assigns; !reflect.DeepEqual(got, []string{at(repo, 5) + " thani-sh-mama"}) {
 		t.Errorf("the look wrote %v, want one claim: the lowest-numbered card", got)
 	}
-	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(5, lookedAt) {
+	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(id(5), lookedAt) {
 		t.Fatalf("the look started %+v, want one run, concerning card 5", runner.started)
 	}
 
 	// The next look, the board as that one left it: card 5 carries its
 	// claim, card 9's can never land, and the wake goes to card 12.
 	relook, next, nextRunner, _, _ := boot(t, []board.Card{
-		{Number: 5, Column: "Backlog", Assignee: "thani-sh-mama"},
-		{Number: 9, Column: "Backlog"},
-		{Number: 12, Column: "Backlog"},
+		card(5, "Backlog", "thani-sh-mama"),
+		card(9, "Backlog", ""),
+		card(12, "Backlog", ""),
 	})
-	next.refuses = map[int]bool{9: true}
+	next.refuses = map[identity]bool{{repo: repo, number: 9}: true}
 	relook.OnBoot(context.Background())
-	if got := next.assigns; !reflect.DeepEqual(got, []string{"12 thani-sh-mama"}) {
+	if got := next.assigns; !reflect.DeepEqual(got, []string{at(repo, 12) + " thani-sh-mama"}) {
 		t.Errorf("the next look wrote %v, want the claim on card 12", got)
 	}
-	if len(nextRunner.started) != 1 || nextRunner.started[0].reason != reasonBacklog(12, lookedAt) {
+	if len(nextRunner.started) != 1 || nextRunner.started[0].reason != reasonBacklog(id(12), lookedAt) {
 		t.Errorf("the next look started %+v, want one run, concerning card 12", nextRunner.started)
 	}
 }
@@ -588,7 +670,7 @@ func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
 // failed is past verification, so it is logged (SYSTEMS.md, step 9; ADR
 // 006) as well as dead-lettered.
 func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
-	router, board, _, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
+	router, board, _, stub, _ := boot(t, []board.Card{card(72, "Refined", "")})
 	board.failReads = attempts // both tries fail
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
@@ -636,7 +718,7 @@ func TestAFailedBootReadWritesBothRecords(t *testing.T) {
 }
 
 func TestABadStartRetriesTheRun(t *testing.T) {
-	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{card(72, "Refined", "")})
 	runner.failStarts = 1 // one transient failure, one try left in the look
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
@@ -650,12 +732,12 @@ func TestABadStartRetriesTheRun(t *testing.T) {
 
 func TestCardsTheRuleDoesNotAnswerWait(t *testing.T) {
 	router, _, runner, stub, _ := boot(t, []board.Card{
-		{Number: 5, Column: "Finished", Assignee: "thani-sh-meme"},
-		{Number: 6, Column: ""},
-		{Number: 7, Column: "Blocked"},
-		{Number: 8, Column: "Backlog", Assignee: "thani-sh-mama"},
-		{Number: 9, Column: "Started"},                        // the rule names what moves it, when its state names nobody
-		{Number: 10, Column: "Started", Assignee: "thani-sh"}, // the operator is never woken
+		card(5, "Finished", "thani-sh-meme"),
+		card(6, "", ""),
+		card(7, "Blocked", ""),
+		card(8, "Backlog", "thani-sh-mama"),
+		card(9, "Started", ""),          // the rule names what moves it, when its state names nobody
+		card(10, "Started", "thani-sh"), // the operator is never woken
 	})
 	router.OnBoot(context.Background())
 	if len(runner.started) != 0 {
@@ -668,9 +750,9 @@ func TestCardsTheRuleDoesNotAnswerWait(t *testing.T) {
 
 func TestNoReasonCarriesThePayload(t *testing.T) {
 	router, _, runner, _, _ := boot(t, []board.Card{
-		{Number: 5, Column: "Backlog"},
-		{Number: 7, Column: "Refined"},
-		{Number: 9, Column: "Started", Assignee: "thani-sh-meme"},
+		card(5, "Backlog", ""),
+		card(7, "Refined", ""),
+		card(9, "Started", "thani-sh-meme"),
 	})
 	sentinel := delivery("third-party-sentinel")
 	sentinel.Event = "third-party-sentinel"
@@ -684,9 +766,9 @@ func TestNoReasonCarriesThePayload(t *testing.T) {
 		}
 	}
 	want := map[string]string{
-		"mama": reasonBacklog(5, lookedAt),
-		"meme": reasonStarted(9, lookedAt),
-		"mimi": reasonRefined(7, lookedAt),
+		"mama": reasonBacklog(id(5), lookedAt),
+		"meme": reasonStarted(id(9), lookedAt),
+		"mimi": reasonRefined(id(7), lookedAt),
 	}
 	if len(runner.started) != len(want) {
 		t.Fatalf("the pass woke %+v, want the three rules the board calls for", runner.started)
@@ -699,7 +781,7 @@ func TestNoReasonCarriesThePayload(t *testing.T) {
 }
 
 func TestTwoLookAtOnceDecideInTurn(t *testing.T) {
-	reader := &serialBoard{cards: []board.Card{{Number: 13, Column: "Refined"}}}
+	reader := &serialBoard{cards: []board.Card{card(13, "Refined", "")}}
 	router, err := New(reader, reader, &stubRunner{ops: &ops{}, running: map[string]bool{}}, &stubLog{}, fleet)
 	if err != nil {
 		t.Fatalf("the package fleet does not serve the rule: %v", err)
@@ -750,6 +832,6 @@ func (s *serialBoard) ReadAll(ctx context.Context) ([]board.Card, error) {
 	return s.cards, nil
 }
 
-func (s *serialBoard) Assign(ctx context.Context, number int, login string) error {
+func (s *serialBoard) Assign(ctx context.Context, repo string, number int, login string) error {
 	return nil
 }

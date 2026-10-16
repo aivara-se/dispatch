@@ -133,55 +133,51 @@ func run(ctx context.Context, args []string) error {
 }
 
 // bridge is how the board client meets the router: the reader and writer one
-// look decides from, bound to the configuration's owner and project. A look
-// reads the board before it writes an assignee and the router serialises the
-// looks, so the card-to-repo map one read fills is the map the same look's
-// write consults — each card's own repository, the owner the board named and
-// not the configured one.
+// look decides from, bound to the configuration's owner and project. The
+// router names the card the rule decided on by its repository and its number,
+// and the repository is the one the board named for that card in the read
+// before the write. The set one read fills is keyed by that identity, so two
+// cards of one number are two entries and the write reaches the one the
+// decision named.
 type bridge struct {
 	client  *board.Client
 	owner   string
 	project int
 
-	repos     map[int]string
-	ambiguous map[int]string
+	placed map[card]bool
+}
+
+// card is one card's identity as the bridge holds it: the repository the board
+// named and the issue's number, the pair that tells two cards of one project
+// apart.
+type card struct {
+	repo   string
+	number int
 }
 
 // ReadAll reads the whole board — the surface the router gives as Reader —
-// and keeps where each card lives, so a write can reach it. A number two
-// cards answer is kept, not resolved: the write refuses rather than picks a
-// repository the board did not name for the decision.
+// and keeps the identity of every card it placed, so a write can name one.
 func (b *bridge) ReadAll(ctx context.Context) ([]board.Card, error) {
 	cards, err := b.client.ReadAll(ctx, b.owner, b.project)
 	if err != nil {
 		return nil, err
 	}
-	repos := make(map[int]string, len(cards))
-	ambiguous := make(map[int]string)
-	for _, card := range cards {
-		if first, seen := repos[card.Number]; seen && first != card.Repo {
-			ambiguous[card.Number] = first
-		}
-		repos[card.Number] = card.Repo
+	placed := make(map[card]bool, len(cards))
+	for _, c := range cards {
+		placed[card{repo: c.Repo, number: c.Number}] = true
 	}
-	b.repos, b.ambiguous = repos, ambiguous
+	b.placed = placed
 	return cards, nil
 }
 
-// Assign writes one card's assignee — the surface the router gives as
-// Writer — to the repository the read before it placed the card in, the
-// repository the board named. A number two cards answer goes to two issues'
-// URLs, and the assignee is written on one the board did not name: the write
-// is refused instead. The refusal names the card; the router's own miss names
-// it again, so these words carry the reason alone.
-func (b *bridge) Assign(ctx context.Context, number int, login string) error {
-	if second, dup := b.ambiguous[number]; dup {
-		return fmt.Errorf("two cards on the project answer %d, %s and %s, so the repository to write is a guess",
-			number, second, b.repos[number])
-	}
-	repo, ok := b.repos[number]
-	if !ok {
-		return fmt.Errorf("no read placed card %d, so its repo is unknown", number)
+// Assign writes one card's assignee — the surface the router gives as Writer
+// — at the issue the card's identity names, the repository the read before it
+// placed the card in. A card no read placed has no repository the board named
+// for it, and the write is refused rather than pointed at a guess. The
+// router's own miss names the card; these words carry the reason alone.
+func (b *bridge) Assign(ctx context.Context, repo string, number int, login string) error {
+	if !b.placed[card{repo: repo, number: number}] {
+		return fmt.Errorf("no read placed card %d of %q, so the repository to write is unknown", number, repo)
 	}
 	owner, name, named := strings.Cut(repo, "/")
 	if !named || owner == "" || name == "" {

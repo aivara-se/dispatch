@@ -17,6 +17,7 @@ const good = `{
 	"events": ["issues", "pull_request"],
 	"owner": "aivara-se",
 	"project": 2,
+	"board": "DISPATCHER_BOARD_TOKEN",
 	"agents": [{"profile": "meme", "login": "thani-sh-meme"}],
 	"routes": [{"name": "org", "secretEnv": "DISPATCHER_WEBHOOK_SECRET"}]
 }`
@@ -39,6 +40,7 @@ func TestLoadReadsEveryField(t *testing.T) {
 		Events:  []string{"issues", "pull_request"},
 		Owner:   "aivara-se",
 		Project: 2,
+		Board:   "DISPATCHER_BOARD_TOKEN",
 		Agents:  []Agent{{Profile: "meme", Login: "thani-sh-meme"}},
 		Routes:  []Route{{Name: "org", SecretEnv: "DISPATCHER_WEBHOOK_SECRET"}},
 	}
@@ -61,6 +63,7 @@ func TestLoadRefuses(t *testing.T) {
 		{"a path with no leading slash", `"path": "/github"`, `"path": "github"`, "no leading slash"},
 		{"an empty owner", `"owner": "aivara-se"`, `"owner": ""`, "owner is empty"},
 		{"a project that is no number", `"project": 2`, `"project": 0`, "not a project number"},
+		{"a board with no secret name", `"board": "DISPATCHER_BOARD_TOKEN"`, `"board": ""`, "no secret name"},
 		{"a route with an empty name", `"name": "org"`, `"name": ""`, "empty name"},
 		{"a route with no secret name", `"secretEnv": "DISPATCHER_WEBHOOK_SECRET"`, `"secretEnv": ""`, "no secret name"},
 		{"a route name twice",

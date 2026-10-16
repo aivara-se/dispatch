@@ -5,6 +5,7 @@
 	"events": ["issues", "pull_request", "projects_v2_item"],
 	"owner": "aivara-se",
 	"project": 2,
+	"board": "DISPATCHER_BOARD_TOKEN",
 	"agents": [
 		{"profile": "mama", "login": "thani-sh-mama"},
 		{"profile": "meme", "login": "thani-sh-meme"},

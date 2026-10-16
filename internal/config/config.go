@@ -34,6 +34,7 @@ type Config struct {
 	Events  []string `json:"events"`
 	Owner   string   `json:"owner"`
 	Project int      `json:"project"`
+	Board   string   `json:"board"`
 	Agents  []Agent  `json:"agents"`
 	Routes  []Route  `json:"routes"`
 }
@@ -83,6 +84,9 @@ func (c Config) validate() error {
 	}
 	if c.Project <= 0 {
 		return fmt.Errorf("config: project %d is not a project number", c.Project)
+	}
+	if c.Board == "" {
+		return fmt.Errorf("config: board has no secret name")
 	}
 	names := make(map[string]bool, len(c.Routes))
 	for i, route := range c.Routes {

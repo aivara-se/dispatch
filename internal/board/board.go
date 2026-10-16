@@ -14,12 +14,14 @@ import (
 )
 
 // Card is one card on the board: the issue's number, the column the
-// project's Status field reports, and the login that holds it. Column and
-// Assignee are empty when the card has none.
+// project's Status field reports, the login that holds it, and the
+// repository the issue lives in — the address each REST surface is built
+// against. Column and Assignee are empty when the card has none.
 type Card struct {
 	Number   int
 	Column   string
 	Assignee string
+	Repo     string
 }
 
 // Client is the board's one client: the GraphQL project read and the REST
@@ -31,15 +33,25 @@ type Client struct {
 	apiBase    string
 }
 
+// NewAt builds the board's client from the one token both surfaces use and
+// names both endpoints, where New fixes them at GitHub's. It is the
+// constructor the boot whose board is a stub server needs: the endpoints
+// stay unexported (their surface names no setter), so the boot in
+// cmd/dispatcher — whose integration answers a stub GitHub — points a real
+// client at one through this.
+func NewAt(token, graphqlURL, apiBase string) *Client {
+	return &Client{
+		httpClient: &http.Client{Transport: tokenTransport{token: token, next: http.DefaultTransport}},
+		graphqlURL: graphqlURL,
+		apiBase:    apiBase,
+	}
+}
+
 // New builds the board's client from the one token both surfaces use, fixed
 // here at boot. The endpoints stay unexported so tests can point them at a
 // stub server.
 func New(token string) *Client {
-	return &Client{
-		httpClient: &http.Client{Transport: tokenTransport{token: token, next: http.DefaultTransport}},
-		graphqlURL: "https://api.github.com/graphql",
-		apiBase:    "https://api.github.com",
-	}
+	return NewAt(token, "https://api.github.com/graphql", "https://api.github.com")
 }
 
 // ReadAll reads the whole board — every card, its column and its assignee —
@@ -139,6 +151,7 @@ const projectQuery = `query($owner: String!, $number: Int!, $cursor: String) {
           content {
             ... on Issue {
               number
+              repository { name }
               assignees(first: 1) {
                 nodes {
                   login
@@ -147,6 +160,7 @@ const projectQuery = `query($owner: String!, $number: Int!, $cursor: String) {
             }
             ... on PullRequest {
               number
+              repository { name }
               assignees(first: 1) {
                 nodes {
                   login
@@ -213,7 +227,13 @@ func (c *Client) projectPage(ctx context.Context, owner string, project int, cur
 		if node.Content.Number == 0 {
 			continue
 		}
-		card := Card{Number: node.Content.Number}
+		if node.Content.Repository.Name == "" {
+			return nil, "", fmt.Errorf("read board: card %d names no repository", node.Content.Number)
+		}
+		card := Card{
+			Number: node.Content.Number,
+			Repo:   node.Content.Repository.Name,
+		}
 		if len(node.Content.Assignees.Nodes) > 0 {
 			card.Assignee = node.Content.Assignees.Nodes[0].Login
 		}
@@ -248,7 +268,10 @@ type graphqlPage struct {
 					} `json:"pageInfo"`
 					Nodes []struct {
 						Content struct {
-							Number    int `json:"number"`
+							Number     int `json:"number"`
+							Repository struct {
+								Name string `json:"name"`
+							} `json:"repository"`
 							Assignees struct {
 								Nodes []struct {
 									Login string `json:"login"`

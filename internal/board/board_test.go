@@ -16,14 +16,14 @@ import (
 // pull-request-numbered, the draft between the cards is not one, and card 72
 // sits in no column.
 const pageOne = `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"page-2"},"nodes":[` +
-	`{"content":{"number":69,"assignees":{"nodes":[{"login":"thani-sh-meme"}]}},"fieldValueByName":{"name":"Finished"}},` +
-	`{"content":{"number":75,"assignees":{"nodes":[]}},"fieldValueByName":{"name":"Started"}},` +
+	`{"content":{"number":69,"assignees":{"nodes":[{"login":"thani-sh-meme"}]},"repository":{"name":"dispatcher"}},"fieldValueByName":{"name":"Finished"}},` +
+	`{"content":{"number":75,"assignees":{"nodes":[]},"repository":{"name":"dispatcher"}},"fieldValueByName":{"name":"Started"}},` +
 	`{"content":{"title":"a draft note"},"fieldValueByName":null}` +
 	`]}}}}}`
 
 const pageTwo = `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":"the-end"},"nodes":[` +
-	`{"content":{"number":71,"assignees":{"nodes":[{"login":"thani-sh-meme"}]}},"fieldValueByName":{"name":"Refined"}},` +
-	`{"content":{"number":72,"assignees":{"nodes":[]}},"fieldValueByName":null}` +
+	`{"content":{"number":71,"assignees":{"nodes":[{"login":"thani-sh-meme"}]},"repository":{"name":"other-repo"}},"fieldValueByName":{"name":"Refined"}},` +
+	`{"content":{"number":72,"assignees":{"nodes":[]},"repository":{"name":"dispatcher"}},"fieldValueByName":null}` +
 	`]}}}}}`
 
 // emptyBoard is a board on which no card exists: an empty answer, not a
@@ -80,10 +80,10 @@ func TestReadAllJoinsPagesIntoTheFullBoard(t *testing.T) {
 		t.Fatalf("read all: %v", err)
 	}
 	want := []Card{
-		{Number: 69, Column: "Finished", Assignee: "thani-sh-meme"},
-		{Number: 75, Column: "Started"},
-		{Number: 71, Column: "Refined", Assignee: "thani-sh-meme"},
-		{Number: 72},
+		{Number: 69, Column: "Finished", Assignee: "thani-sh-meme", Repo: "dispatcher"},
+		{Number: 75, Column: "Started", Repo: "dispatcher"},
+		{Number: 71, Column: "Refined", Assignee: "thani-sh-meme", Repo: "other-repo"},
+		{Number: 72, Repo: "dispatcher"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the board read as %+v, want %+v", got, want)
@@ -114,6 +114,7 @@ func TestReadAllRefuses(t *testing.T) {
 		{"a project that is absent", http.StatusOK, `{"data":{"organization":{"projectV2":null}}}`, "project 2 is absent"},
 		{"a page with more pages and no cursor", http.StatusOK, `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":""},"nodes":[]}}}}}`, "names no cursor"},
 		{"a board whose pages do not advance", http.StatusOK, `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"stuck"},"nodes":[]}}}}}`, "do not advance"},
+		{"a card that names no repository", http.StatusOK, `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":[{"content":{"number":73},"fieldValueByName":{"name":"Backlog"}}]}}}}}`, "names no repository"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -159,13 +159,19 @@ func (s *stubLog) Dead(miss audit.Miss) error {
 
 // boot is one pass over a board of cards: the parts built the way the
 // binary will build them, on a board that keeps itself true, and the clock
-// fixed so the reasons are compared by equality.
-func boot(cards []board.Card) (*Router, *stubBoard, *stubRunner, *stubLog, *ops) {
+// fixed so the reasons are compared by equality. The package's fleet serves
+// the rule, so a refusal here is a bug in this file and not a case under
+// test: boot fails rather than answer a router it does not have.
+func boot(t *testing.T, cards []board.Card) (*Router, *stubBoard, *stubRunner, *stubLog, *ops) {
+	t.Helper()
 	track := &ops{}
 	boardy := &stubBoard{ops: track, cards: cards}
 	runner := &stubRunner{ops: track, running: map[string]bool{}}
 	stub := &stubLog{}
-	router := New(boardy, boardy, runner, stub, fleet)
+	router, err := New(boardy, boardy, runner, stub, fleet)
+	if err != nil {
+		t.Fatalf("boot: %v", err)
+	}
 	router.now = func() time.Time { return lookedAt }
 	return router, boardy, runner, stub, track
 }
@@ -174,8 +180,64 @@ func delivery(id string) receiver.Delivery {
 	return receiver.Delivery{ID: id, Event: "issues", Repo: "aivara-se/dispatcher", Action: "opened"}
 }
 
+// TestAFleetThatCannotServeTheRuleIsRefused pins the check the boot makes on
+// its own fleet: the rule names one refiner and the builders, and a fleet
+// without either role would boot, read the board and wake nobody for the
+// cards that role serves. The refusal names the profile the rule needs and
+// the fleet lacks.
+func TestAFleetThatCannotServeTheRuleIsRefused(t *testing.T) {
+	cases := []struct {
+		name    string
+		fleet   map[string]string
+		missing string
+	}{
+		{
+			"builders and no refiner",
+			map[string]string{"thani-sh-meme": "meme", "thani-sh-mimi": "mimi"},
+			"mama",
+		},
+		{
+			"no builder",
+			map[string]string{"thani-sh-mama": "mama", "thani-sh-momo": "momo"},
+			"builder",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			boardy := &stubBoard{ops: &ops{}}
+			router, err := New(boardy, boardy, &stubRunner{ops: &ops{}, running: map[string]bool{}}, &stubLog{}, c.fleet)
+			if err == nil {
+				t.Fatal("New built a router for a fleet the rule cannot be served by")
+			}
+			if router != nil {
+				t.Errorf("New answered a router beside its refusal")
+			}
+			if !strings.Contains(err.Error(), c.missing) {
+				t.Errorf("the refusal %q does not name %q", err, c.missing)
+			}
+		})
+	}
+}
+
+// TestAFleetWithTheRefinerAndOneBuilderServes pins the other half of the
+// judgement: the rule needs a builder, not every builder, so a fleet of the
+// refiner and one developer is served.
+func TestAFleetWithTheRefinerAndOneBuilderServes(t *testing.T) {
+	boardy := &stubBoard{ops: &ops{}}
+	router, err := New(boardy, boardy, &stubRunner{ops: &ops{}, running: map[string]bool{}}, &stubLog{}, map[string]string{
+		"thani-sh-mama": "mama",
+		"thani-sh-meme": "meme",
+	})
+	if err != nil {
+		t.Fatalf("New refused a fleet that serves the rule: %v", err)
+	}
+	if router == nil {
+		t.Fatal("New answered no router for a fleet that serves the rule")
+	}
+}
+
 func TestABacklogCardWakesItsRefinerOncePerLook(t *testing.T) {
-	router, _, runner, stub, track := boot([]board.Card{
+	router, _, runner, stub, track := boot(t, []board.Card{
 		{Number: 5, Column: "Backlog"},
 		{Number: 8, Column: "Backlog"},
 	})
@@ -207,7 +269,7 @@ func TestABacklogCardWakesItsRefinerOncePerLook(t *testing.T) {
 }
 
 func TestADeliveryIsAnsweredOnTheLook(t *testing.T) {
-	router, _, runner, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
 	if code != http.StatusAccepted {
 		t.Fatalf("delivered %d, want 202", code)
@@ -231,7 +293,7 @@ func TestADeliveryIsAnsweredOnTheLook(t *testing.T) {
 }
 
 func TestRefinedCardsGoToAFreeDeveloperEach(t *testing.T) {
-	router, board, runner, _, _ := boot([]board.Card{
+	router, board, runner, _, _ := boot(t, []board.Card{
 		{Number: 80, Column: "Refined"},
 		{Number: 81, Column: "Refined"},
 	})
@@ -246,7 +308,7 @@ func TestRefinedCardsGoToAFreeDeveloperEach(t *testing.T) {
 }
 
 func TestAFinishedCardIsNoDevelopersHold(t *testing.T) {
-	router, board, runner, _, _ := boot([]board.Card{
+	router, board, runner, _, _ := boot(t, []board.Card{
 		{Number: 69, Column: "Finished", Assignee: "thani-sh-meme"},
 		{Number: 70, Column: "Finished", Assignee: "thani-sh-mimi"},
 		{Number: 71, Column: "Finished", Assignee: "thani-sh-meme"},
@@ -262,7 +324,7 @@ func TestAFinishedCardIsNoDevelopersHold(t *testing.T) {
 }
 
 func TestARefinedCardWaitsWhenNoDeveloperIsFree(t *testing.T) {
-	router, board, runner, stub, _ := boot([]board.Card{
+	router, board, runner, stub, _ := boot(t, []board.Card{
 		{Number: 80, Column: "Refined"},
 		{Number: 81, Column: "Started", Assignee: "thani-sh-meme"},
 		{Number: 82, Column: "Started", Assignee: "thani-sh-mimi"},
@@ -282,7 +344,7 @@ func TestARefinedCardWaitsWhenNoDeveloperIsFree(t *testing.T) {
 }
 
 func TestARunEndHandsTheFreeDeveloperTheNextCard(t *testing.T) {
-	router, _, runner, _, _ := boot([]board.Card{
+	router, _, runner, _, _ := boot(t, []board.Card{
 		{Number: 90, Column: "Refined"},
 		{Number: 91, Column: "Started", Assignee: "thani-sh-mimi"},
 	})
@@ -292,7 +354,7 @@ func TestARunEndHandsTheFreeDeveloperTheNextCard(t *testing.T) {
 		t.Fatalf("the first look started %+v, want meme for card 90", runner.started)
 	}
 
-	relook, board, runner, _, _ := boot([]board.Card{
+	relook, board, runner, _, _ := boot(t, []board.Card{
 		{Number: 90, Column: "Refined", Assignee: "thani-sh-meme"},
 		{Number: 91, Column: "Refined"}, // mimi's hold ended with her run
 	})
@@ -306,7 +368,7 @@ func TestARunEndHandsTheFreeDeveloperTheNextCard(t *testing.T) {
 }
 
 func TestAStartedCardWaitsWhileItsRunIsInFlight(t *testing.T) {
-	router, _, runner, stub, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
 	runner.running["meme"] = true
 	router.OnBoot(context.Background())
 	if len(runner.started) != 0 {
@@ -318,7 +380,7 @@ func TestAStartedCardWaitsWhileItsRunIsInFlight(t *testing.T) {
 }
 
 func TestAStartedCardIsWokenExactlyOnceForItsState(t *testing.T) {
-	router, _, runner, stub, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
 	if code := router.OnDelivery(context.Background(), delivery("d-0")); code != http.StatusAccepted {
 		t.Fatalf("first look answered %d, want 202", code)
 	}
@@ -344,10 +406,10 @@ func TestAStartedCardIsWokenExactlyOnceForItsState(t *testing.T) {
 }
 
 func TestAStartedCardAtBootStartsTheRunItsClaimPromises(t *testing.T) {
-	router, _, _, _, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	router, _, _, _, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
 	router.OnBoot(context.Background()) // the run went; the agent left the card where it was
 
-	reboot, _, runner, _, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	reboot, _, runner, _, _ := boot(t, []board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
 	reboot.OnBoot(context.Background())
 	if len(runner.started) != 1 || runner.started[0].reason != reasonStarted(9, lookedAt) {
 		t.Errorf("the boot look started %+v, want its agent restarted for the unkept promise", runner.started)
@@ -355,10 +417,10 @@ func TestAStartedCardAtBootStartsTheRunItsClaimPromises(t *testing.T) {
 }
 
 func TestARestartRepeatsNoClaimTheBoardCarries(t *testing.T) {
-	router, _, _, _, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router, _, _, _, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	router.OnBoot(context.Background()) // meme is claimed, and the claim is on the board
 
-	reboot, board, runner, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined", Assignee: "thani-sh-meme"}})
+	reboot, board, runner, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined", Assignee: "thani-sh-meme"}})
 	reboot.OnBoot(context.Background())
 	if len(board.assigns) != 0 {
 		t.Errorf("the boot look rewrote %+v, want the claim the board already carries", board.assigns)
@@ -372,7 +434,7 @@ func TestARestartRepeatsNoClaimTheBoardCarries(t *testing.T) {
 }
 
 func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
-	router, _, runner, stub, track := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router, _, runner, stub, track := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	runner.failStarts = attempts // every try fails, so the first look drops its wake
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
@@ -413,7 +475,7 @@ func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
 }
 
 func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
-	router, board, _, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router, board, _, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	board.failWrites = attempts // both tries fail
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
@@ -438,7 +500,7 @@ func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
 // goes to the next card naming it, in that same look — so a card the pass can
 // never claim stops no card behind it.
 func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
-	router, board, runner, stub, track := boot([]board.Card{
+	router, board, runner, stub, track := boot(t, []board.Card{
 		{Number: 9, Column: "Backlog"},
 		{Number: 12, Column: "Backlog"},
 	})
@@ -489,7 +551,7 @@ func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
 // card behind the refusal is reached by the next look instead — a refusal
 // defers a card, it never stops the board.
 func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
-	router, first, runner, _, _ := boot([]board.Card{
+	router, first, runner, _, _ := boot(t, []board.Card{
 		{Number: 5, Column: "Backlog"},
 		{Number: 9, Column: "Backlog"},
 		{Number: 12, Column: "Backlog"},
@@ -506,7 +568,7 @@ func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
 
 	// The next look, the board as that one left it: card 5 carries its
 	// claim, card 9's can never land, and the wake goes to card 12.
-	relook, next, nextRunner, _, _ := boot([]board.Card{
+	relook, next, nextRunner, _, _ := boot(t, []board.Card{
 		{Number: 5, Column: "Backlog", Assignee: "thani-sh-mama"},
 		{Number: 9, Column: "Backlog"},
 		{Number: 12, Column: "Backlog"},
@@ -526,7 +588,7 @@ func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
 // failed is past verification, so it is logged (SYSTEMS.md, step 9; ADR
 // 006) as well as dead-lettered.
 func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
-	router, board, _, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router, board, _, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	board.failReads = attempts // both tries fail
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
@@ -558,7 +620,7 @@ func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
 // delivery behind it: the boot look that cannot read the board appends its
 // line, with no answer to carry, and dead-letters the reason beside it.
 func TestAFailedBootReadWritesBothRecords(t *testing.T) {
-	router, board, _, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router, board, _, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	board.failReads = attempts // both tries fail
 
 	router.OnBoot(context.Background())
@@ -574,7 +636,7 @@ func TestAFailedBootReadWritesBothRecords(t *testing.T) {
 }
 
 func TestABadStartRetriesTheRun(t *testing.T) {
-	router, _, runner, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router, _, runner, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	runner.failStarts = 1 // one transient failure, one try left in the look
 
 	code := router.OnDelivery(context.Background(), delivery("d-72"))
@@ -587,7 +649,7 @@ func TestABadStartRetriesTheRun(t *testing.T) {
 }
 
 func TestCardsTheRuleDoesNotAnswerWait(t *testing.T) {
-	router, _, runner, stub, _ := boot([]board.Card{
+	router, _, runner, stub, _ := boot(t, []board.Card{
 		{Number: 5, Column: "Finished", Assignee: "thani-sh-meme"},
 		{Number: 6, Column: ""},
 		{Number: 7, Column: "Blocked"},
@@ -605,7 +667,7 @@ func TestCardsTheRuleDoesNotAnswerWait(t *testing.T) {
 }
 
 func TestNoReasonCarriesThePayload(t *testing.T) {
-	router, _, runner, _, _ := boot([]board.Card{
+	router, _, runner, _, _ := boot(t, []board.Card{
 		{Number: 5, Column: "Backlog"},
 		{Number: 7, Column: "Refined"},
 		{Number: 9, Column: "Started", Assignee: "thani-sh-meme"},
@@ -638,7 +700,10 @@ func TestNoReasonCarriesThePayload(t *testing.T) {
 
 func TestTwoLookAtOnceDecideInTurn(t *testing.T) {
 	reader := &serialBoard{cards: []board.Card{{Number: 13, Column: "Refined"}}}
-	router := New(reader, reader, &stubRunner{ops: &ops{}, running: map[string]bool{}}, &stubLog{}, fleet)
+	router, err := New(reader, reader, &stubRunner{ops: &ops{}, running: map[string]bool{}}, &stubLog{}, fleet)
+	if err != nil {
+		t.Fatalf("the package fleet does not serve the rule: %v", err)
+	}
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex

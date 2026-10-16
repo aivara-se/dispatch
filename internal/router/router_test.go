@@ -1,0 +1,557 @@
+package router
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/aivara-se/dispatcher/internal/audit"
+	"github.com/aivara-se/dispatcher/internal/board"
+	"github.com/aivara-se/dispatcher/internal/receiver"
+)
+
+var fleet = map[string]string{
+	"thani-sh-mama": "mama",
+	"thani-sh-meme": "meme",
+	"thani-sh-mimi": "mimi",
+}
+
+// lookedAt is the one moment the pass's clock returns, so every reason the
+// tests see is an exact string compared by equality, not by containment.
+var lookedAt = time.Date(2026, 10, 16, 6, 46, 33, 0, time.UTC)
+
+// ops records the pass's actions in the order it took them, so a test can
+// read a look: the cards claimed, the runs asked for, and whether the write
+// came before the run it prepares.
+type ops struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func (o *ops) take(what string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.list = append(o.list, what)
+}
+
+func (o *ops) count(what string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := 0
+	for _, got := range o.list {
+		if strings.HasPrefix(got, what) {
+			n++
+		}
+	}
+	return n
+}
+
+// stubBoard is the board the pass reads and writes, keeping its own state
+// true: an assign the pass made is on the cards it reads back, the way the
+// durable marker is on the real board.
+type stubBoard struct {
+	ops          *ops
+	mu           sync.Mutex
+	cards        []board.Card
+	failReads    int
+	readAttempts int
+	failWrites   int
+	assigns      []string
+}
+
+func (b *stubBoard) ReadAll(ctx context.Context) ([]board.Card, error) {
+	b.mu.Lock()
+	b.readAttempts++
+	fail := b.failReads > 0
+	if fail {
+		b.failReads--
+	}
+	cards := make([]board.Card, len(b.cards))
+	copy(cards, b.cards)
+	b.mu.Unlock()
+	if fail {
+		return nil, errors.New("graphql answered 500")
+	}
+	return cards, nil
+}
+
+func (b *stubBoard) Assign(ctx context.Context, number int, login string) error {
+	b.ops.take(fmt.Sprintf("assign %d %s", number, login))
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failWrites > 0 {
+		b.failWrites--
+		return errors.New("the endpoint answered 500")
+	}
+	b.assigns = append(b.assigns, fmt.Sprintf("%d %s", number, login))
+	for i, card := range b.cards {
+		if card.Number == number {
+			b.cards[i].Assignee = login
+		}
+	}
+	return nil
+}
+
+type stubRun struct {
+	profile string
+	reason  string
+}
+
+// stubRunner is one run per profile, remembered the way the runner's table
+// is: Running reads the map a start set.
+type stubRunner struct {
+	ops        *ops
+	mu         sync.Mutex
+	running    map[string]bool
+	started    []stubRun
+	failStarts int
+}
+
+func (s *stubRunner) Start(ctx context.Context, profile, reason string) (string, string, error) {
+	s.ops.take(fmt.Sprintf("start %s", profile))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failStarts > 0 {
+		s.failStarts--
+		return "", "", errors.New("the child would not start")
+	}
+	s.running[profile] = true
+	s.started = append(s.started, stubRun{profile: profile, reason: reason})
+	return profile + "-run-1", profile + "-session-1", nil
+}
+
+func (s *stubRunner) Running(profile string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running[profile]
+}
+
+type stubLog struct {
+	mu     sync.Mutex
+	lines  []audit.Line
+	misses []audit.Miss
+}
+
+func (s *stubLog) Append(line audit.Line) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lines = append(s.lines, line)
+	return nil
+}
+
+func (s *stubLog) Dead(miss audit.Miss) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.misses = append(s.misses, miss)
+	return nil
+}
+
+// boot is one pass over a board of cards: the parts built the way the
+// binary will build them, on a board that keeps itself true, and the clock
+// fixed so the reasons are compared by equality.
+func boot(cards []board.Card) (*Router, *stubBoard, *stubRunner, *stubLog, *ops) {
+	track := &ops{}
+	boardy := &stubBoard{ops: track, cards: cards}
+	runner := &stubRunner{ops: track, running: map[string]bool{}}
+	stub := &stubLog{}
+	router := New(boardy, boardy, runner, stub, fleet)
+	router.now = func() time.Time { return lookedAt }
+	return router, boardy, runner, stub, track
+}
+
+func delivery(id string) receiver.Delivery {
+	return receiver.Delivery{ID: id, Event: "issues", Repo: "aivara-se/dispatcher", Action: "opened"}
+}
+
+func TestABacklogCardWakesItsRefinerOncePerLook(t *testing.T) {
+	router, _, runner, stub, track := boot([]board.Card{
+		{Number: 5, Column: "Backlog"},
+		{Number: 8, Column: "Backlog"},
+	})
+	router.OnBoot(context.Background())
+
+	if !reflect.DeepEqual(track.list, []string{
+		"assign 5 thani-sh-mama", // the write, before the run it prepares
+		"start mama",             // one run per agent per look, the lowest-numbered card
+	}) {
+		t.Fatalf("the look took %v", track.list)
+	}
+	if got, want := runner.started[0].reason, reasonBacklog(5, lookedAt); got != want {
+		t.Errorf("the reason was %q, want %q", got, want)
+	}
+	wantLine := audit.Line{
+		Trigger:  "boot",
+		Decision: "woke mama for card 5",
+		Card:     5,
+		Assignee: "thani-sh-mama",
+		Run:      "mama-run-1",
+		Session:  "mama-session-1",
+	}
+	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
+		t.Errorf("the log read as %+v, want %+v", got, []audit.Line{wantLine})
+	}
+	if len(stub.misses) != 0 {
+		t.Errorf("the look dead-lettered %+v", stub.misses)
+	}
+}
+
+func TestADeliveryIsAnsweredOnTheLook(t *testing.T) {
+	router, _, runner, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	code := router.OnDelivery(context.Background(), delivery("d-72"))
+	if code != http.StatusAccepted {
+		t.Fatalf("delivered %d, want 202", code)
+	}
+	wantLine := audit.Line{
+		Trigger:    "delivery",
+		Deliveries: []string{"d-72"},
+		Decision:   "woke meme for card 72",
+		Card:       72,
+		Assignee:   "thani-sh-meme",
+		Run:        "meme-run-1",
+		Session:    "meme-session-1",
+		Answer:     http.StatusAccepted,
+	}
+	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
+		t.Errorf("the log read as %+v, want %+v", got, []audit.Line{wantLine})
+	}
+	if len(runner.started) != 1 || runner.started[0].reason != reasonRefined(72, lookedAt) {
+		t.Errorf("the look started %+v, want one run with the refined card's reason", runner.started)
+	}
+}
+
+func TestRefinedCardsGoToAFreeDeveloperEach(t *testing.T) {
+	router, board, runner, _, _ := boot([]board.Card{
+		{Number: 80, Column: "Refined"},
+		{Number: 81, Column: "Refined"},
+	})
+	router.OnBoot(context.Background())
+
+	if got := board.assigns; !reflect.DeepEqual(got, []string{"80 thani-sh-meme", "81 thani-sh-mimi"}) {
+		t.Errorf("the claims were %v, want the free developers one card each", got)
+	}
+	if len(runner.started) != 2 {
+		t.Errorf("the pass started %d runs, want 2", len(runner.started))
+	}
+}
+
+func TestARefinedCardWaitsWhenNoDeveloperIsFree(t *testing.T) {
+	router, board, runner, stub, _ := boot([]board.Card{
+		{Number: 80, Column: "Refined"},
+		{Number: 81, Column: "Started", Assignee: "thani-sh-meme"},
+		{Number: 82, Column: "Started", Assignee: "thani-sh-mimi"},
+	})
+	runner.running["meme"] = true
+	runner.running["mimi"] = true
+	router.OnBoot(context.Background())
+	if len(runner.started) != 0 {
+		t.Errorf("the pass started %+v, want no run while no developer is free", runner.started)
+	}
+	if len(board.assigns) != 0 {
+		t.Errorf("the pass wrote %+v, want the card to wait", board.assigns)
+	}
+	if got := stub.lines; len(got) != 1 || got[0].Decision != "nothing to wake" {
+		t.Errorf("the log read as %+v, want one nothing-to-wake line", got)
+	}
+}
+
+func TestARunEndHandsTheFreeDeveloperTheNextCard(t *testing.T) {
+	router, _, runner, _, _ := boot([]board.Card{
+		{Number: 90, Column: "Refined"},
+		{Number: 91, Column: "Started", Assignee: "thani-sh-mimi"},
+	})
+	runner.running["mimi"] = true // her run is in flight; her card waits with her
+	router.OnBoot(context.Background())
+	if len(runner.started) != 1 || runner.started[0].profile != "meme" {
+		t.Fatalf("the first look started %+v, want meme for card 90", runner.started)
+	}
+
+	relook, board, runner, _, _ := boot([]board.Card{
+		{Number: 90, Column: "Refined", Assignee: "thani-sh-meme"},
+		{Number: 91, Column: "Refined"}, // mimi's hold ended with her run
+	})
+	relook.OnRunEnd(context.Background(), "mimi")
+	if got := board.assigns; !reflect.DeepEqual(got, []string{"91 thani-sh-mimi"}) {
+		t.Errorf("the run-end look wrote %v, want only card 91's claim", got)
+	}
+	if len(runner.started) != 1 || runner.started[0].profile != "mimi" {
+		t.Errorf("the run-end look started %+v, want mimi on card 91", runner.started)
+	}
+}
+
+func TestAStartedCardWaitsWhileItsRunIsInFlight(t *testing.T) {
+	router, _, runner, stub, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	runner.running["meme"] = true
+	router.OnBoot(context.Background())
+	if len(runner.started) != 0 {
+		t.Errorf("the pass started %+v for an agent with a run in flight", runner.started)
+	}
+	if got := stub.lines; len(got) != 1 || got[0].Decision != "nothing to wake" {
+		t.Errorf("the log read as %+v, want one nothing-to-wake line", got)
+	}
+}
+
+func TestAStartedCardIsWokenExactlyOnceForItsState(t *testing.T) {
+	router, _, runner, stub, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	if code := router.OnDelivery(context.Background(), delivery("d-0")); code != http.StatusAccepted {
+		t.Fatalf("first look answered %d, want 202", code)
+	}
+	if len(runner.started) != 1 {
+		t.Fatalf("first look started %+v, want one run", runner.started)
+	}
+	code := router.OnDelivery(context.Background(), delivery("d-9"))
+	if code != http.StatusAccepted {
+		t.Fatalf("second look answered %d, want 202", code)
+	}
+	if len(runner.started) != 1 {
+		t.Errorf("the pass started a second run for the agent's one state, want suppression")
+	}
+	wantLine := audit.Line{
+		Trigger:    "delivery",
+		Deliveries: []string{"d-9"},
+		Decision:   "nothing to wake",
+		Answer:     http.StatusAccepted,
+	}
+	if got := stub.lines[1]; !reflect.DeepEqual(got, wantLine) {
+		t.Errorf("second look read as %+v, want %+v", got, wantLine)
+	}
+}
+
+func TestAStartedCardAtBootStartsTheRunItsClaimPromises(t *testing.T) {
+	router, _, _, _, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	router.OnBoot(context.Background()) // the run went; the agent left the card where it was
+
+	reboot, _, runner, _, _ := boot([]board.Card{{Number: 9, Column: "Started", Assignee: "thani-sh-meme"}})
+	reboot.OnBoot(context.Background())
+	if len(runner.started) != 1 || runner.started[0].reason != reasonStarted(9, lookedAt) {
+		t.Errorf("the boot look started %+v, want its agent restarted for the unkept promise", runner.started)
+	}
+}
+
+func TestARestartRepeatsNoClaimTheBoardCarries(t *testing.T) {
+	router, _, _, _, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	router.OnBoot(context.Background()) // meme is claimed, and the claim is on the board
+
+	reboot, board, runner, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined", Assignee: "thani-sh-meme"}})
+	reboot.OnBoot(context.Background())
+	if len(board.assigns) != 0 {
+		t.Errorf("the boot look rewrote %+v, want the claim the board already carries", board.assigns)
+	}
+	if len(runner.started) != 0 {
+		t.Errorf("the boot look started %+v, want nobody for a claimed card", runner.started)
+	}
+	if got := stub.lines; len(got) != 1 || got[0].Decision != "nothing to wake" {
+		t.Errorf("the log read as %+v, want one nothing-to-wake line", got)
+	}
+}
+
+func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
+	router, _, runner, stub, track := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	runner.failStarts = attempts // every try fails, so the first look drops its wake
+
+	code := router.OnDelivery(context.Background(), delivery("d-72"))
+	if code != http.StatusBadGateway {
+		t.Fatalf("the dropped wake answered %d, want 502", code)
+	}
+	if got := track.count("assign 72"); got != 1 {
+		t.Errorf("the write happened %d times, want once", got)
+	}
+	want := audit.Miss{
+		Reason: "start the run for meme: the child would not start",
+		Line: audit.Line{
+			Trigger:    "delivery",
+			Deliveries: []string{"d-72"},
+			Decision:   "refused",
+			Card:       72,
+			Assignee:   "thani-sh-meme",
+			Answer:     http.StatusBadGateway,
+		},
+	}
+	if got := stub.misses; len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Errorf("the miss read as %+v, want %+v", got, []audit.Miss{want})
+	}
+
+	code = router.OnDelivery(context.Background(), delivery("d-73"))
+	if code != http.StatusAccepted {
+		t.Fatalf("the repaired wake answered %d, want 202", code)
+	}
+	if got := track.count("assign 72"); got != 1 {
+		t.Errorf("the repair rewrote the claim: %d writes", got)
+	}
+	if len(runner.started) != 1 || runner.started[0].reason != reasonRefined(72, lookedAt) {
+		t.Errorf("the look started %+v, want the run that repairs the card", runner.started)
+	}
+	if len(stub.misses) != 1 {
+		t.Errorf("the second look dead-lettered %+v, want the first look's only", stub.misses)
+	}
+}
+
+func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
+	router, board, _, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	board.failWrites = attempts // both tries fail
+
+	code := router.OnDelivery(context.Background(), delivery("d-72"))
+	if code != http.StatusBadGateway {
+		t.Fatalf("the failed write answered %d, want 502", code)
+	}
+	if got := len(stub.misses); got != 1 {
+		t.Fatalf("the look wrote %d misses, want one", got)
+	}
+	if got := stub.misses[0]; !strings.HasPrefix(got.Reason, "assign card 72:") {
+		t.Errorf("the miss said %q, want the failed assign named", got.Reason)
+	}
+	code = router.OnDelivery(context.Background(), delivery("d-73"))
+	if code != http.StatusAccepted {
+		t.Fatalf("the retry answered %d, want 202", code)
+	}
+}
+
+func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
+	router, board, _, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	board.failReads = attempts // both tries fail
+
+	code := router.OnDelivery(context.Background(), delivery("d-72"))
+	if code != http.StatusBadGateway {
+		t.Fatalf("a failed read answered %d, want 502", code)
+	}
+	if got := board.readAttempts; got != attempts {
+		t.Errorf("the read happened %d times, want %d", got, attempts)
+	}
+	if got := stub.lines; len(got) != 0 {
+		t.Errorf("the look appended %+v, want nothing: the miss is the record", got)
+	}
+	want := audit.Miss{
+		Reason: "read the board: graphql answered 500",
+		Line: audit.Line{
+			Trigger:    "delivery",
+			Deliveries: []string{"d-72"},
+			Decision:   "refused",
+			Answer:     http.StatusBadGateway,
+		},
+	}
+	if got := stub.misses; len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Errorf("the miss read as %+v, want %+v", got, []audit.Miss{want})
+	}
+}
+
+func TestABadStartRetriesTheRun(t *testing.T) {
+	router, _, runner, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	runner.failStarts = 1 // one transient failure, one try left in the look
+
+	code := router.OnDelivery(context.Background(), delivery("d-72"))
+	if code != http.StatusAccepted {
+		t.Fatalf("a retried start answered %d, want 202", code)
+	}
+	if len(runner.started) != 1 || len(stub.misses) != 0 {
+		t.Errorf("the look left %+v started and %d misses, want one start and no misses", runner.started, len(stub.misses))
+	}
+}
+
+func TestCardsTheRuleDoesNotAnswerWait(t *testing.T) {
+	router, _, runner, stub, _ := boot([]board.Card{
+		{Number: 5, Column: "Finished", Assignee: "thani-sh-meme"},
+		{Number: 6, Column: ""},
+		{Number: 7, Column: "Blocked"},
+		{Number: 8, Column: "Backlog", Assignee: "thani-sh-mama"},
+		{Number: 9, Column: "Started"},                        // the rule names what moves it, when its state names nobody
+		{Number: 10, Column: "Started", Assignee: "thani-sh"}, // the operator is never woken
+	})
+	router.OnBoot(context.Background())
+	if len(runner.started) != 0 {
+		t.Errorf("the pass started %+v for cards the rule does not answer", runner.started)
+	}
+	if got := stub.lines; len(got) != 1 || got[0].Decision != "nothing to wake" {
+		t.Errorf("the log read as %+v, want one nothing-to-wake line", got)
+	}
+}
+
+func TestNoReasonCarriesThePayload(t *testing.T) {
+	router, _, runner, _, _ := boot([]board.Card{
+		{Number: 5, Column: "Backlog"},
+		{Number: 7, Column: "Refined"},
+		{Number: 9, Column: "Started", Assignee: "thani-sh-meme"},
+	})
+	sentinel := delivery("third-party-sentinel")
+	sentinel.Event = "third-party-sentinel"
+	sentinel.Repo = "third-party-sentinel/aivara"
+	sentinel.Action = "third-party-sentinel"
+	router.OnDelivery(context.Background(), sentinel)
+
+	for _, run := range runner.started {
+		if strings.Contains(run.reason, "third-party-sentinel") {
+			t.Errorf("the reason carried the payload: %q", run.reason)
+		}
+	}
+	want := map[string]string{
+		"mama": reasonBacklog(5, lookedAt),
+		"meme": reasonStarted(9, lookedAt),
+		"mimi": reasonRefined(7, lookedAt),
+	}
+	if len(runner.started) != len(want) {
+		t.Fatalf("the pass woke %+v, want the three rules the board calls for", runner.started)
+	}
+	for _, run := range runner.started {
+		if got, ok := want[run.profile]; !ok || run.reason != got {
+			t.Errorf("%s's reason was %q, want %q", run.profile, run.reason, got)
+		}
+	}
+}
+
+func TestTwoLookAtOnceDecideInTurn(t *testing.T) {
+	reader := &serialBoard{cards: []board.Card{{Number: 13, Column: "Refined"}}}
+	router := New(reader, reader, &stubRunner{ops: &ops{}, running: map[string]bool{}}, &stubLog{}, fleet)
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var codes []int
+	for i := range 8 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			code := router.OnDelivery(context.Background(), delivery(fmt.Sprintf("d-%d", i)))
+			mu.Lock()
+			codes = append(codes, code)
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+	if most := reader.most.Load(); most != 1 {
+		t.Errorf("the reader saw %d passes over it at once, want 1", most)
+	}
+	for _, code := range codes {
+		if code != http.StatusAccepted {
+			t.Errorf("a concurrent look answered %d, want 202", code)
+		}
+	}
+}
+
+// serialBoard is a reader that counts how many reads it serves at once, so
+// a test can see whether two looks decide against the same records.
+type serialBoard struct {
+	cards []board.Card
+	live  atomic.Int64
+	most  atomic.Int64
+}
+
+func (s *serialBoard) ReadAll(ctx context.Context) ([]board.Card, error) {
+	now := s.live.Add(1)
+	for {
+		most := s.most.Load()
+		if now <= most || s.most.CompareAndSwap(most, now) {
+			break
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	s.live.Add(-1)
+	return s.cards, nil
+}
+
+func (s *serialBoard) Assign(ctx context.Context, number int, login string) error {
+	return nil
+}

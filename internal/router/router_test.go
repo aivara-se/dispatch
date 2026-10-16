@@ -521,6 +521,10 @@ func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
 	}
 }
 
+// TestAFailedBoardReadRefusesTheLook pins the refusal on both records: the
+// audit log's line for the look, and the miss beside it. A look whose read
+// failed is past verification, so it is logged (SYSTEMS.md, step 9; ADR
+// 006) as well as dead-lettered.
 func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
 	router, board, _, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
 	board.failReads = attempts // both tries fail
@@ -532,20 +536,40 @@ func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
 	if got := board.readAttempts; got != attempts {
 		t.Errorf("the read happened %d times, want %d", got, attempts)
 	}
-	if got := stub.lines; len(got) != 0 {
-		t.Errorf("the look appended %+v, want nothing: the miss is the record", got)
+	wantLine := audit.Line{
+		Trigger:    "delivery",
+		Deliveries: []string{"d-72"},
+		Decision:   "refused",
+		Answer:     http.StatusBadGateway,
+	}
+	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
+		t.Errorf("the log read as %+v, want the look's line %+v", got, wantLine)
 	}
 	want := audit.Miss{
 		Reason: "read the board: graphql answered 500",
-		Line: audit.Line{
-			Trigger:    "delivery",
-			Deliveries: []string{"d-72"},
-			Decision:   "refused",
-			Answer:     http.StatusBadGateway,
-		},
+		Line:   wantLine,
 	}
 	if got := stub.misses; len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 		t.Errorf("the miss read as %+v, want %+v", got, []audit.Miss{want})
+	}
+}
+
+// TestAFailedBootReadWritesBothRecords is the same refusal with no
+// delivery behind it: the boot look that cannot read the board appends its
+// line, with no answer to carry, and dead-letters the reason beside it.
+func TestAFailedBootReadWritesBothRecords(t *testing.T) {
+	router, board, _, stub, _ := boot([]board.Card{{Number: 72, Column: "Refined"}})
+	board.failReads = attempts // both tries fail
+
+	router.OnBoot(context.Background())
+
+	wantLine := audit.Line{Trigger: "boot", Decision: "refused"}
+	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
+		t.Errorf("the log read as %+v, want the look's line %+v", got, wantLine)
+	}
+	wantMiss := audit.Miss{Reason: "read the board: graphql answered 500", Line: wantLine}
+	if got := stub.misses; len(got) != 1 || !reflect.DeepEqual(got[0], wantMiss) {
+		t.Errorf("the miss read as %+v, want %+v", got, []audit.Miss{wantMiss})
 	}
 }
 

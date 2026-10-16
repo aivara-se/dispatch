@@ -181,6 +181,10 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 		if trigger == "delivery" {
 			line.Answer = http.StatusBadGateway
 		}
+		// A refused look is still a look, and the line is the audit's
+		// record of it; the same line, with the reason beside it, is the
+		// dead-letter file's (SYSTEMS.md, step 9; ADR 006).
+		r.log.Append(line)
 		r.miss(err, audit.Miss{Reason: err.Error(), Line: line})
 		return http.StatusBadGateway
 	}

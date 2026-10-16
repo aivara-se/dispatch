@@ -72,9 +72,10 @@ func until(t *testing.T, what string, cond func() bool) {
 // surface is asked for the token the configuration names, so one token
 // built once at boot is part of what an integration proves.
 type stubGitHub struct {
-	mu    sync.Mutex
-	cards map[int][]stubCard
-	taken []string // the surfaces hit, in order
+	mu        sync.Mutex
+	cards     map[int][]stubCard
+	taken     []string // the surfaces hit, in order
+	failReads bool     // the project read answers 500, the way an unreachable board does
 }
 
 // stubCard is one card's state the stub holds: its column, its holder, and
@@ -137,6 +138,10 @@ func (s *stubGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/graphql":
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if s.failReads {
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		s.servePage(w)
@@ -521,6 +526,58 @@ func TestRunBootsWithTheFixtureConfig(t *testing.T) {
 	// The run-end look woke nobody: one run, the board unchanged.
 	if got := invocations(t, argsLog); len(got) != 1 {
 		t.Errorf("the run is %q, want one", got)
+	}
+}
+
+// TestTheBootLookThatCannotReadTheBoardLeavesBothRecords boots against a
+// stub GitHub whose project read answers 500. The look is refused, and the
+// refusal is on both records: the audit log's line for the look, and the
+// dead-letter file's miss with the reason beside it. No claim is written
+// and no run starts.
+func TestTheBootLookThatCannotReadTheBoardLeavesBothRecords(t *testing.T) {
+	stub := newStubGitHub()
+	stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
+	stub.failReads = true
+	github := stub.start(t)
+	auditFile := auditPath(t)
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	hermes := filepath.Join(t.TempDir(), "hermes")
+	stubHermes(t, hermes, argsLog)
+	t.Setenv("STUB_SLEEP", "0")
+
+	addr := freePort(t)
+	cancel, done := serveOn(t, configAt(t, addr, theOrgRoute), github, hermes, auditFile)
+	defer cancel()
+
+	until(t, "the refused boot look's line", func() bool {
+		line, ok := auditHas(t, auditFile, "boot")
+		return ok && line.Decision == "refused"
+	})
+	// The look's line is the only one, and it carries no answer: a boot
+	// answers nobody.
+	lines := auditLines(t, auditFile)
+	if len(lines) != 1 || lines[0].Trigger != "boot" || lines[0].Answer != 0 {
+		t.Errorf("the audit reads %+v, want the boot look's one line with no answer", lines)
+	}
+	deadFile := filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl")
+	var miss audit.Miss
+	until(t, "the miss on the dead-letter file", func() bool {
+		raw, err := os.ReadFile(deadFile)
+		return err == nil && json.Unmarshal(raw, &miss) == nil
+	})
+	if !strings.Contains(miss.Reason, "read the board") {
+		t.Errorf("the miss %q does not name the failed read", miss.Reason)
+	}
+	// The refused look wrote no claim and started no run.
+	if got := stub.assigns(); len(got) != 0 {
+		t.Errorf("the refused look wrote %+v, want no claim", got)
+	}
+	if got := invocations(t, argsLog); len(got) != 0 {
+		t.Errorf("the refused look started %+v, want no run", got)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
 	}
 }
 

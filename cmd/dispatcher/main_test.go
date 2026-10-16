@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -69,12 +70,14 @@ func until(t *testing.T, what string, cond func() bool) {
 // built once at boot is part of what an integration proves.
 type stubGitHub struct {
 	mu    sync.Mutex
-	cards map[int]stubCard
+	cards map[int][]stubCard
 	taken []string // the surfaces hit, in order
 }
 
 // stubCard is one card's state the stub holds: its column, its holder, and
-// the repository it lives in.
+// the repository it lives in. A repository is part of a card's identity,
+// not a second variable of it: a project can answer one number with two
+// cards, an issue's number being the issue's repository's own.
 type stubCard struct {
 	column   string
 	assignee string
@@ -82,14 +85,14 @@ type stubCard struct {
 }
 
 func newStubGitHub() *stubGitHub {
-	return &stubGitHub{cards: make(map[int]stubCard)}
+	return &stubGitHub{cards: make(map[int][]stubCard)}
 }
 
-// put seats a card on the stub's board.
+// put seats a card on the stub's board, by number and repository.
 func (s *stubGitHub) put(number int, card stubCard) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cards[number] = card
+	s.cards[number] = append(s.cards[number], card)
 }
 
 func (s *stubGitHub) calls() []string {
@@ -168,21 +171,22 @@ func (s *stubGitHub) servePage(w http.ResponseWriter) {
 	sort.Ints(numbers)
 	nodes := make([]stubNode, 0, len(numbers))
 	for _, number := range numbers {
-		var n stubNode
-		card := s.cards[number]
-		n.Content.Number = number
-		n.Content.Repository.Name = card.repo
-		if card.assignee != "" {
-			n.Content.Assignees.Nodes = append(n.Content.Assignees.Nodes, struct {
-				Login string `json:"login"`
-			}{card.assignee})
+		for _, card := range s.cards[number] {
+			var n stubNode
+			n.Content.Number = number
+			n.Content.Repository.Name = card.repo
+			if card.assignee != "" {
+				n.Content.Assignees.Nodes = append(n.Content.Assignees.Nodes, struct {
+					Login string `json:"login"`
+				}{card.assignee})
+			}
+			if card.column != "" {
+				n.Status = &struct {
+					Name string `json:"name"`
+				}{card.column}
+			}
+			nodes = append(nodes, n)
 		}
-		if card.column != "" {
-			n.Status = &struct {
-				Name string `json:"name"`
-			}{card.column}
-		}
-		nodes = append(nodes, n)
 	}
 	raw, err := json.Marshal(nodes)
 	if err != nil {
@@ -192,16 +196,33 @@ func (s *stubGitHub) servePage(w http.ResponseWriter) {
 	fmt.Fprintf(w, `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":%s}}}}}`, raw)
 }
 
-// serveIssue answers the REST issue endpoint. An assign carries: the card's
-// holder becomes the login the body names, and the next read reports it.
+// serveIssue answers the REST issue endpoint, one path per repository. An
+// assign carries: the card's holder becomes the login the body names, and
+// the next read reports it.
 func (s *stubGitHub) serveIssue(w http.ResponseWriter, r *http.Request) {
-	var number int
-	if _, err := fmt.Sscanf(r.URL.Path, "/repos/"+org+"/"+repo+"/issues/%d", &number); err != nil {
+	_, tail, hasRepo := strings.Cut(r.URL.Path, "/repos/"+org+"/")
+	if !hasRepo {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	card, ok := s.cards[number]
-	if !ok {
+	repoName, numberText, hasNumber := strings.Cut(tail, "/issues/")
+	if !hasNumber {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	number, err := strconv.Atoi(numberText)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	var card stubCard
+	found := false
+	for _, entered := range s.cards[number] {
+		if entered.repo == repoName {
+			card, found = entered, true
+		}
+	}
+	if !found {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -217,7 +238,11 @@ func (s *stubGitHub) serveIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		card.assignee = body.Assignees[0]
-		s.cards[number] = card
+		for i, entered := range s.cards[number] {
+			if entered.repo == repoName {
+				s.cards[number][i] = card
+			}
+		}
 		answerIssue(w, card)
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -746,6 +771,58 @@ func TestTheConfiguredPathServesTheReceiverAndNothingElse(t *testing.T) {
 		if response.StatusCode != http.StatusNotFound {
 			t.Errorf("a GET on %s answered %d, want 404", probe.path, response.StatusCode)
 		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// TestTwoCardsWithOneNumberRefuseTheWrite boots a board where two repositories
+// answer one card number — an issue number is the issue's repository's own,
+// and one project can hold both. The assign refuses the write instead of
+// guessing the repository the board did not name for the decision, and the
+// miss is dead-lettered with both repositories: the next look repeats, and
+// under no claim does a run start whose assignee never went.
+func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
+	stub := newStubGitHub()
+	stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
+	stub.put(unsettledCard, stubCard{column: "Backlog", repo: "aivara-se/.website"})
+	github := stub.start(t)
+	auditFile := auditPath(t)
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	hermes := filepath.Join(t.TempDir(), "hermes")
+	stubHermes(t, hermes, argsLog)
+	t.Setenv("STUB_SLEEP", "0")
+
+	addr := freePort(t)
+	cancel, done := serveOn(t, configAt(t, addr, theOrgRoute), github, hermes, auditFile)
+	defer cancel()
+
+	deadFile := filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl")
+	until(t, "the refused assign", func() bool {
+		_, err := os.Stat(deadFile)
+		return err == nil
+	})
+	raw, err := os.ReadFile(deadFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var miss audit.Miss
+	if err := json.Unmarshal(raw, &miss); err != nil {
+		t.Fatalf("the dead letter is not a miss: %v", err)
+	}
+	if !strings.Contains(miss.Reason, "two cards") || !strings.Contains(miss.Reason, repo) || !strings.Contains(miss.Reason, ".website") {
+		t.Errorf("the miss %q does not name the two repositories the number answers", miss.Reason)
+	}
+	// No assign reached the stub, so no issue holds a claim the pass wrote
+	// for a number it could not resolve.
+	if got := stub.assigns(); len(got) != 0 {
+		t.Errorf("the look wrote %+v, want nothing it could not resolve", got)
+	}
+	// And no run is started under it.
+	if got := invocations(t, argsLog); len(got) != 0 {
+		t.Errorf("the run table holds %+v, want one run the write was refused of", got)
 	}
 	cancel()
 	if err := <-done; err != nil {

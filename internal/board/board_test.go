@@ -13,17 +13,18 @@ import (
 )
 
 // pageOne and pageTwo are the two pages of a three-card board — card 75 is
-// pull-request-numbered, the draft between the cards is not one, and card 72
-// sits in no column.
+// pull-request-numbered and lives in another owner's repository of the same
+// name, the draft between the cards is not one, and card 72 sits in no
+// column.
 const pageOne = `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"page-2"},"nodes":[` +
-	`{"content":{"number":69,"assignees":{"nodes":[{"login":"thani-sh-meme"}]},"repository":{"name":"dispatcher"}},"fieldValueByName":{"name":"Finished"}},` +
-	`{"content":{"number":75,"assignees":{"nodes":[]},"repository":{"name":"dispatcher"}},"fieldValueByName":{"name":"Started"}},` +
+	`{"content":{"number":69,"assignees":{"nodes":[{"login":"thani-sh-meme"}]},"repository":{"nameWithOwner":"aivara-se/dispatcher"}},"fieldValueByName":{"name":"Finished"}},` +
+	`{"content":{"number":75,"assignees":{"nodes":[]},"repository":{"nameWithOwner":"mnmtanish/dispatcher"}},"fieldValueByName":{"name":"Started"}},` +
 	`{"content":{"title":"a draft note"},"fieldValueByName":null}` +
 	`]}}}}}`
 
 const pageTwo = `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":"the-end"},"nodes":[` +
-	`{"content":{"number":71,"assignees":{"nodes":[{"login":"thani-sh-meme"}]},"repository":{"name":"other-repo"}},"fieldValueByName":{"name":"Refined"}},` +
-	`{"content":{"number":72,"assignees":{"nodes":[]},"repository":{"name":"dispatcher"}},"fieldValueByName":null}` +
+	`{"content":{"number":71,"assignees":{"nodes":[{"login":"thani-sh-meme"}]},"repository":{"nameWithOwner":"aivara-se/.website"}},"fieldValueByName":{"name":"Refined"}},` +
+	`{"content":{"number":72,"assignees":{"nodes":[]},"repository":{"nameWithOwner":"aivara-se/dispatcher"}},"fieldValueByName":null}` +
 	`]}}}}}`
 
 // emptyBoard is a board on which no card exists: an empty answer, not a
@@ -80,10 +81,10 @@ func TestReadAllJoinsPagesIntoTheFullBoard(t *testing.T) {
 		t.Fatalf("read all: %v", err)
 	}
 	want := []Card{
-		{Number: 69, Column: "Finished", Assignee: "thani-sh-meme", Repo: "dispatcher"},
-		{Number: 75, Column: "Started", Repo: "dispatcher"},
-		{Number: 71, Column: "Refined", Assignee: "thani-sh-meme", Repo: "other-repo"},
-		{Number: 72, Repo: "dispatcher"},
+		{Number: 69, Column: "Finished", Assignee: "thani-sh-meme", Repo: "aivara-se/dispatcher"},
+		{Number: 75, Column: "Started", Repo: "mnmtanish/dispatcher"},
+		{Number: 71, Column: "Refined", Assignee: "thani-sh-meme", Repo: "aivara-se/.website"},
+		{Number: 72, Repo: "aivara-se/dispatcher"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the board read as %+v, want %+v", got, want)

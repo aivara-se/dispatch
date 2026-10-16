@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/aivara-se/dispatcher/internal/audit"
+	"github.com/aivara-se/dispatcher/internal/board"
 	"github.com/aivara-se/dispatcher/internal/config"
 )
 
@@ -27,7 +28,8 @@ const (
 	webhookSecret = "stub-webhook-secret"
 	boardToken    = "stub-board-token"
 	org           = "aivara-se"
-	repo          = "dispatcher"
+	repo          = "aivara-se/dispatcher"
+	foreignRepo   = "mnmtanish/dispatcher"
 	unsettledCard = 9
 	backlogReason = "card 9 sits in Backlog with nobody holding it; refine it"
 	assigneeMama  = "thani-sh-mama"
@@ -75,9 +77,10 @@ type stubGitHub struct {
 }
 
 // stubCard is one card's state the stub holds: its column, its holder, and
-// the repository it lives in. A repository is part of a card's identity,
-// not a second variable of it: a project can answer one number with two
-// cards, an issue's number being the issue's repository's own.
+// the repository it lives in, owner and name. A repository is part of a
+// card's identity, not a second variable of it: a project can answer one
+// number with two cards, an issue's number being the issue's repository's
+// own — and two repositories of two owners share a name.
 type stubCard struct {
 	column   string
 	assignee string
@@ -101,11 +104,12 @@ func (s *stubGitHub) calls() []string {
 	return append([]string(nil), s.taken...)
 }
 
-// assigns returns the issue surfaces that wrote.
+// assigns returns the issue surfaces that wrote, wherever the repository
+// they wrote to lives.
 func (s *stubGitHub) assigns() []string {
 	var out []string
 	for _, call := range s.calls() {
-		if strings.Contains(call, "PATCH /repos/"+org+"/") {
+		if strings.HasPrefix(call, "PATCH /repos/") {
 			out = append(out, call)
 		}
 	}
@@ -150,7 +154,8 @@ type stubNode struct {
 	Content struct {
 		Number     int `json:"number,omitempty"`
 		Repository struct {
-			Name string `json:"name"`
+			Name          string `json:"name"`
+			NameWithOwner string `json:"nameWithOwner"`
 		} `json:"repository"`
 		Assignees struct {
 			Nodes []struct {
@@ -174,7 +179,8 @@ func (s *stubGitHub) servePage(w http.ResponseWriter) {
 		for _, card := range s.cards[number] {
 			var n stubNode
 			n.Content.Number = number
-			n.Content.Repository.Name = card.repo
+			n.Content.Repository.Name = card.repo[strings.LastIndex(card.repo, "/")+1:]
+			n.Content.Repository.NameWithOwner = card.repo
 			if card.assignee != "" {
 				n.Content.Assignees.Nodes = append(n.Content.Assignees.Nodes, struct {
 					Login string `json:"login"`
@@ -196,11 +202,12 @@ func (s *stubGitHub) servePage(w http.ResponseWriter) {
 	fmt.Fprintf(w, `{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false},"nodes":%s}}}}}`, raw)
 }
 
-// serveIssue answers the REST issue endpoint, one path per repository. An
-// assign carries: the card's holder becomes the login the body names, and
-// the next read reports it.
+// serveIssue answers the REST issue endpoint, one path per repository —
+// owner and name both, the way the API's path is built. An assign carries:
+// the card's holder becomes the login the body names, and the next read
+// reports it.
 func (s *stubGitHub) serveIssue(w http.ResponseWriter, r *http.Request) {
-	_, tail, hasRepo := strings.Cut(r.URL.Path, "/repos/"+org+"/")
+	_, tail, hasRepo := strings.Cut(r.URL.Path, "/repos/")
 	if !hasRepo {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -395,9 +402,10 @@ func deliver(t *testing.T, to, event, id, body string) int {
 // wakeupBody is a delivery's payload.
 const wakeupBody = `{"action":"created","number":9,"repository":{"full_name":"aivara-se/dispatcher"}}`
 
-// theURL is where the card lives, the way the REST surface is built.
+// theURL is where the card lives, the way the REST surface is built: the
+// repository's owner and name, one path per repository.
 func theURL() string {
-	return fmt.Sprintf("/repos/%s/%s/issues/%d", org, repo, unsettledCard)
+	return fmt.Sprintf("/repos/%s/issues/%d", repo, unsettledCard)
 }
 
 // auditLines reads the audit file's lines. A file not yet written reads
@@ -780,14 +788,16 @@ func TestTheConfiguredPathServesTheReceiverAndNothingElse(t *testing.T) {
 
 // TestTwoCardsWithOneNumberRefuseTheWrite boots a board where two repositories
 // answer one card number — an issue number is the issue's repository's own,
-// and one project can hold both. The assign refuses the write instead of
-// guessing the repository the board did not name for the decision, and the
-// miss is dead-lettered with both repositories: the next look repeats, and
-// under no claim does a run start whose assignee never went.
+// and one project can hold both. Here the two repositories share a name and
+// differ only in their owner, which a name alone cannot tell apart; the
+// assign refuses the write instead of guessing the repository the board did
+// not name for the decision, and the miss is dead-lettered with both
+// repositories: the next look repeats, and under no claim does a run start
+// whose assignee never went.
 func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
 	stub := newStubGitHub()
 	stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
-	stub.put(unsettledCard, stubCard{column: "Backlog", repo: "aivara-se/.website"})
+	stub.put(unsettledCard, stubCard{column: "Backlog", repo: foreignRepo})
 	github := stub.start(t)
 	auditFile := auditPath(t)
 	argsLog := filepath.Join(t.TempDir(), "args.log")
@@ -812,7 +822,7 @@ func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
 	if err := json.Unmarshal(raw, &miss); err != nil {
 		t.Fatalf("the dead letter is not a miss: %v", err)
 	}
-	if !strings.Contains(miss.Reason, "two cards") || !strings.Contains(miss.Reason, repo) || !strings.Contains(miss.Reason, ".website") {
+	if !strings.Contains(miss.Reason, "two cards") || !strings.Contains(miss.Reason, repo) || !strings.Contains(miss.Reason, foreignRepo) {
 		t.Errorf("the miss %q does not name the two repositories the number answers", miss.Reason)
 	}
 	// No assign reached the stub, so no issue holds a claim the pass wrote
@@ -824,6 +834,77 @@ func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
 	if got := invocations(t, argsLog); len(got) != 0 {
 		t.Errorf("the run table holds %+v, want one run the write was refused of", got)
 	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// TestTheWriteRefusesWhatTheReadCannotPlace pins the two refusals the writer
+// makes before it builds a URL: a number no read placed, and a repository
+// that is not an owner and a name. Neither refusal reaches GitHub — a write
+// that went out on either would land wherever the URL happened to point.
+func TestTheWriteRefusesWhatTheReadCannotPlace(t *testing.T) {
+	cases := []struct {
+		name string
+		repo string
+		want string
+	}{
+		{"a number no read placed", "", "no read placed it"},
+		{"a repository that is not an owner and a name", "dispatcher", "is not a repository's owner and name"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stub := newStubGitHub()
+			github := stub.start(t)
+			theBoard := &bridge{
+				client: board.NewAt(boardToken, github+"/graphql", github),
+				owner:  org,
+				repos:  make(map[int]string),
+			}
+			if c.repo != "" {
+				theBoard.repos[unsettledCard] = c.repo
+			}
+			err := theBoard.Assign(context.Background(), unsettledCard, assigneeMama)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("assign answered %v, want %q", err, c.want)
+			}
+			if got := stub.calls(); len(got) != 0 {
+				t.Errorf("a refused write reached GitHub: %v", got)
+			}
+		})
+	}
+}
+
+// TestACardOfAnotherOwnerIsClaimedWhereTheBoardNamesIt boots a board whose
+// one card lives in a repository the configured owner does not own, under a
+// name the configured owner has too. The page names a card's repository as
+// its owner and name, and the claim is written at that repository's issue:
+// a card is written where the board named it, never at the configured owner
+// with a name two owners share.
+func TestACardOfAnotherOwnerIsClaimedWhereTheBoardNamesIt(t *testing.T) {
+	stub := newStubGitHub()
+	stub.put(unsettledCard, stubCard{column: "Backlog", repo: foreignRepo})
+	github := stub.start(t)
+	auditFile := auditPath(t)
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	hermes := filepath.Join(t.TempDir(), "hermes")
+	stubHermes(t, hermes, argsLog)
+	t.Setenv("STUB_SLEEP", "0")
+
+	addr := freePort(t)
+	cancel, done := serveOn(t, configAt(t, addr, theOrgRoute), github, hermes, auditFile)
+	defer cancel()
+
+	until(t, "the claim the boot look writes", func() bool {
+		return len(stub.assigns()) == 1
+	})
+	if got := stub.assigns(); !strings.Contains(got[0], "/repos/"+foreignRepo+"/issues/9") {
+		t.Fatalf("the look wrote %+v, want one claim at %s", got, foreignRepo)
+	}
+	until(t, "the run the claim started", func() bool {
+		return len(invocations(t, argsLog)) == 1
+	})
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("run: %v", err)

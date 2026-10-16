@@ -63,6 +63,7 @@ type stubBoard struct {
 	failReads    int
 	readAttempts int
 	failWrites   int
+	refuses      map[int]bool // the numbers the board refuses to write: two cards answer them
 	assigns      []string
 }
 
@@ -86,6 +87,9 @@ func (b *stubBoard) Assign(ctx context.Context, number int, login string) error 
 	b.ops.take(fmt.Sprintf("assign %d %s", number, login))
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.refuses[number] {
+		return fmt.Errorf("card %d is answered by two cards, so the repository to write is a guess", number)
+	}
 	if b.failWrites > 0 {
 		b.failWrites--
 		return errors.New("the endpoint answered 500")
@@ -425,6 +429,95 @@ func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
 	code = router.OnDelivery(context.Background(), delivery("d-73"))
 	if code != http.StatusAccepted {
 		t.Fatalf("the retry answered %d, want 202", code)
+	}
+}
+
+// TestARefusedClaimHandsTheSlotToTheNextCard pins what a permanent refusal and
+// one wake per agent per look have to keep together: the card whose claim the
+// board refused stays unclaimed and is dead-lettered, and the agent's one wake
+// goes to the next card naming it, in that same look — so a card the pass can
+// never claim stops no card behind it.
+func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
+	router, board, runner, stub, track := boot([]board.Card{
+		{Number: 9, Column: "Backlog"},
+		{Number: 12, Column: "Backlog"},
+	})
+	board.refuses = map[int]bool{9: true}
+
+	code := router.OnDelivery(context.Background(), delivery("d-9"))
+	if code != http.StatusBadGateway {
+		t.Errorf("a look whose claim was refused answered %d, want 502", code)
+	}
+	want := []string{
+		"assign 9 thani-sh-mama", // the refused claim: one try and its retry
+		"assign 9 thani-sh-mama",
+		"assign 12 thani-sh-mama", // the same look's next card naming the agent
+		"start mama",
+	}
+	if got := track.list; !reflect.DeepEqual(got, want) {
+		t.Errorf("the look took %v, want %v", got, want)
+	}
+	if got := board.assigns; !reflect.DeepEqual(got, []string{"12 thani-sh-mama"}) {
+		t.Errorf("the look wrote %v, want the card behind the refusal claimed", got)
+	}
+	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(12, lookedAt) {
+		t.Errorf("the look started %+v, want one run, concerning card 12", runner.started)
+	}
+	if len(stub.misses) != 1 {
+		t.Fatalf("the look dead-lettered %+v, want one miss: the refused claim", stub.misses)
+	}
+	if got := stub.misses[0]; got.Line.Card != 9 || !strings.HasPrefix(got.Reason, "assign card 9:") {
+		t.Errorf("the miss read as %+v, want card 9's refused claim", got)
+	}
+	wantLine := audit.Line{
+		Trigger:    "delivery",
+		Deliveries: []string{"d-9"},
+		Decision:   "woke mama for card 12",
+		Card:       12,
+		Assignee:   "thani-sh-mama",
+		Run:        "mama-run-1",
+		Session:    "mama-session-1",
+		Answer:     http.StatusBadGateway, // the refusal refuses the look back
+	}
+	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
+		t.Errorf("the log read as %+v, want %+v", got, []audit.Line{wantLine})
+	}
+}
+
+// TestARefusedClaimSpendsOneWakePerAgentPerLook pins the other half: a look
+// that has already spent an agent's wake starts no second run for it, and the
+// card behind the refusal is reached by the next look instead — a refusal
+// defers a card, it never stops the board.
+func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
+	router, first, runner, _, _ := boot([]board.Card{
+		{Number: 5, Column: "Backlog"},
+		{Number: 9, Column: "Backlog"},
+		{Number: 12, Column: "Backlog"},
+	})
+	first.refuses = map[int]bool{9: true}
+
+	router.OnBoot(context.Background())
+	if got := first.assigns; !reflect.DeepEqual(got, []string{"5 thani-sh-mama"}) {
+		t.Errorf("the look wrote %v, want one claim: the lowest-numbered card", got)
+	}
+	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(5, lookedAt) {
+		t.Fatalf("the look started %+v, want one run, concerning card 5", runner.started)
+	}
+
+	// The next look, the board as that one left it: card 5 carries its
+	// claim, card 9's can never land, and the wake goes to card 12.
+	relook, next, nextRunner, _, _ := boot([]board.Card{
+		{Number: 5, Column: "Backlog", Assignee: "thani-sh-mama"},
+		{Number: 9, Column: "Backlog"},
+		{Number: 12, Column: "Backlog"},
+	})
+	next.refuses = map[int]bool{9: true}
+	relook.OnBoot(context.Background())
+	if got := next.assigns; !reflect.DeepEqual(got, []string{"12 thani-sh-mama"}) {
+		t.Errorf("the next look wrote %v, want the claim on card 12", got)
+	}
+	if len(nextRunner.started) != 1 || nextRunner.started[0].reason != reasonBacklog(12, lookedAt) {
+		t.Errorf("the next look started %+v, want one run, concerning card 12", nextRunner.started)
 	}
 }
 

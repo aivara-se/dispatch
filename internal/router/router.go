@@ -1,7 +1,8 @@
 // Package router runs the state pass: it reads the whole board, asks every
 // card the rule PRODUCT.md fixes — what moves it forward, who does it, and
 // is it already happening — and starts the runs the rule calls for, one per
-// agent per look at the lowest-numbered card that names it.
+// agent per look, at the lowest-numbered card that names it and whose claim
+// lands.
 //
 // It looks in three places and nowhere else: a delivery arrives, a run ends,
 // and once at boot. The looks run one at a time behind one mutex, so two
@@ -157,6 +158,9 @@ type wake struct {
 
 // look is one state pass, whole: it reads the board, asks every card the
 // rule, claims one wake per agent it has room for, and answers the trigger.
+// A card whose claim the board refuses is walked past, not left holding the
+// agent's one wake for the look: the pass claims again with that agent's
+// slot released, so the next card naming it is reached in this same look.
 // The delivery trigger carries an answer for its sender; the other triggers
 // answer nobody and their lines leave the answer absent. The pass runs
 // under the mutex: no two looks decide against the same records.
@@ -192,37 +196,57 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 		}
 	}
 
-	for _, w := range r.claim(r.needs(cards, at), held, at) {
-		call := w
-		if call.write {
-			if err := tryOnce(func() error { return r.writer.Assign(ctx, call.card.Number, call.login) }); err != nil {
+	// The claims run in rounds: a round hands every agent it has room for
+	// one card, and an agent whose write the board refused keeps its slot
+	// for the next round, which claims the next card naming it. A card
+	// claimed once is never claimed again in the same look.
+	asks := r.needs(cards, at)
+	decided := make(map[string]bool) // the profiles this look has served
+	claimed := make(map[int]bool)    // the cards this look has claimed
+	for {
+		wakes := r.claim(asks, held, decided, claimed, at)
+		if len(wakes) == 0 {
+			break
+		}
+		for _, w := range wakes {
+			call := w
+			claimed[call.card.Number] = true
+			if call.write {
+				if err := tryOnce(func() error { return r.writer.Assign(ctx, call.card.Number, call.login) }); err != nil {
+					failed = true
+					// The write is the claim, and it was refused: the card
+					// stays unclaimed, so this agent's one wake for the look
+					// is not spent on it — the next card naming the agent is
+					// claimed in this same look, and this card's retry is the
+					// next look.
+					delete(decided, call.profile)
+					r.fail(trigger, deliveries, fmt.Errorf("assign card %d: %w", call.card.Number, err), call.card.Number, call.login)
+					continue
+				}
+			}
+			run, session, err := tryBuild(func() (string, string, error) { return r.runner.Start(ctx, call.profile, call.reason) })
+			if err != nil {
 				failed = true
-				r.fail(trigger, deliveries, fmt.Errorf("assign card %d: %w", call.card.Number, err), call.card.Number, call.login)
+				// The claim was written and the run never went: the record says
+				// so, and the next look restarts the run instead of deciding
+				// the card again — the write is not repeated.
+				r.attempted[call.card.Number] = attempt{column: call.card.Column, assignee: call.login, ran: false}
+				r.fail(trigger, deliveries, fmt.Errorf("start the run for %s: %w", call.profile, err), call.card.Number, call.login)
 				continue
 			}
+			// The claim is recorded on the state the pass leaves behind: the
+			// column it read, the assignee it wrote, and that the run went.
+			r.attempted[call.card.Number] = attempt{column: call.card.Column, assignee: call.login, ran: true}
+			woke = append(woke, audit.Line{
+				Trigger:    trigger,
+				Deliveries: deliveries,
+				Decision:   fmt.Sprintf("woke %s for card %d", call.profile, call.card.Number),
+				Card:       call.card.Number,
+				Assignee:   call.login,
+				Run:        run,
+				Session:    session,
+			})
 		}
-		run, session, err := tryBuild(func() (string, string, error) { return r.runner.Start(ctx, call.profile, call.reason) })
-		if err != nil {
-			failed = true
-			// The claim was written and the run never went: the record says
-			// so, and the next look restarts the run instead of deciding
-			// the card again — the write is not repeated.
-			r.attempted[call.card.Number] = attempt{column: call.card.Column, assignee: call.login, ran: false}
-			r.fail(trigger, deliveries, fmt.Errorf("start the run for %s: %w", call.profile, err), call.card.Number, call.login)
-			continue
-		}
-		// The claim is recorded on the state the pass leaves behind: the
-		// column it read, the assignee it wrote, and that the run went.
-		r.attempted[call.card.Number] = attempt{column: call.card.Column, assignee: call.login, ran: true}
-		woke = append(woke, audit.Line{
-			Trigger:    trigger,
-			Deliveries: deliveries,
-			Decision:   fmt.Sprintf("woke %s for card %d", call.profile, call.card.Number),
-			Card:       call.card.Number,
-			Assignee:   call.login,
-			Run:        run,
-			Session:    session,
-		})
 	}
 
 	if failed {
@@ -303,15 +327,21 @@ func (r *Router) request(card board.Card, at time.Time) (need, bool) {
 
 // claim turns the rule's names into wakes: at most one per agent per look,
 // the lowest-numbered card that names it, and never for a profile with a
-// run in flight. The pass writes no claim for an agent it cannot start —
-// the cards it skips stay unclaimed, and the next look finds them.
-func (r *Router) claim(asks []need, held map[string]bool, at time.Time) []wake {
+// run in flight. decided is the profiles this look has already served and
+// claimed the cards it has already claimed; the look owns both. A profile
+// whose claim the board refused is deleted from decided by the look that
+// refused it, so the next card naming that agent is claimed in the same
+// look. The pass writes no claim for an agent it cannot start — the cards
+// it skips stay unclaimed, and the next look finds them.
+func (r *Router) claim(asks []need, held map[string]bool, decided map[string]bool, claimed map[int]bool, at time.Time) []wake {
 	sort.SliceStable(asks, func(i, j int) bool {
 		return asks[i].card.Number < asks[j].card.Number
 	})
-	decided := make(map[string]bool) // the profiles this look has woken
 	var wakes []wake
 	for _, ask := range asks {
+		if claimed[ask.card.Number] {
+			continue
+		}
 		switch ask.kind {
 		case "refiner":
 			login, ok := r.loginOf(refinerProfile)

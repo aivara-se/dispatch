@@ -169,19 +169,20 @@ func (b *bridge) ReadAll(ctx context.Context) ([]board.Card, error) {
 // Writer — to the repository the read before it placed the card in, the
 // repository the board named. A number two cards answer goes to two issues'
 // URLs, and the assignee is written on one the board did not name: the write
-// is refused instead.
+// is refused instead. The refusal names the card; the router's own miss names
+// it again, so these words carry the reason alone.
 func (b *bridge) Assign(ctx context.Context, number int, login string) error {
 	if second, dup := b.ambiguous[number]; dup {
-		return fmt.Errorf("assign card %d: two cards on the project answer %d, %s and %s, so the repository to write is a guess",
-			number, number, second, b.repos[number])
+		return fmt.Errorf("two cards on the project answer %d, %s and %s, so the repository to write is a guess",
+			number, second, b.repos[number])
 	}
 	repo, ok := b.repos[number]
 	if !ok {
-		return fmt.Errorf("assign card %d: no read placed it, so its repo is unknown", number)
+		return fmt.Errorf("no read placed card %d, so its repo is unknown", number)
 	}
 	owner, name, named := strings.Cut(repo, "/")
 	if !named || owner == "" || name == "" {
-		return fmt.Errorf("assign card %d: the board named %q, which is not a repository's owner and name", number, repo)
+		return fmt.Errorf("the board named %q for card %d, which is not a repository's owner and name", repo, number)
 	}
 	return b.client.Assign(ctx, owner, name, number, login)
 }

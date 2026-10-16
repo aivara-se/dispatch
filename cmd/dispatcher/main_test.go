@@ -33,6 +33,7 @@ const (
 	unsettledCard = 9
 	backlogReason = "card 9 sits in Backlog with nobody holding it; refine it"
 	assigneeMama  = "thani-sh-mama"
+	behindCard    = 12 // the card behind a number two cards answer
 	fleetJSON     = `{"profile": "mama", "login": "thani-sh-mama"},
 		{"profile": "meme", "login": "thani-sh-meme"},
 		{"profile": "mimi", "login": "thani-sh-mimi"},
@@ -840,6 +841,71 @@ func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
 	}
 }
 
+// TestAClaimThatCannotLandStopsNoCardBehindIt boots a board whose number 9 is
+// answered by two repositories and whose card 12 is not. The collision's claim
+// can never land, and the look walks past it: card 12 is claimed and its run
+// starts in that same look, while the refusal is dead-lettered with both
+// repositories named. A card the pass cannot claim costs itself, never the
+// cards behind it.
+func TestAClaimThatCannotLandStopsNoCardBehindIt(t *testing.T) {
+	stub := newStubGitHub()
+	stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
+	stub.put(unsettledCard, stubCard{column: "Backlog", repo: foreignRepo})
+	stub.put(behindCard, stubCard{column: "Backlog", repo: repo})
+	github := stub.start(t)
+	auditFile := auditPath(t)
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	hermes := filepath.Join(t.TempDir(), "hermes")
+	stubHermes(t, hermes, argsLog)
+	t.Setenv("STUB_SLEEP", "0")
+
+	addr := freePort(t)
+	cancel, done := serveOn(t, configAt(t, addr, theOrgRoute), github, hermes, auditFile)
+	defer cancel()
+
+	behind := fmt.Sprintf("/repos/%s/issues/%d", repo, behindCard)
+	until(t, "the claim on the card behind the collision", func() bool {
+		for _, call := range stub.assigns() {
+			if strings.HasSuffix(call, behind) {
+				return true
+			}
+		}
+		return false
+	})
+	if got := stub.assigns(); len(got) != 1 {
+		t.Errorf("the boot wrote %+v, want one claim: the card behind the collision", got)
+	}
+	until(t, "the run for the card behind the collision", func() bool {
+		return len(invocations(t, argsLog)) == 1
+	})
+	if got := invocations(t, argsLog); !strings.Contains(got[0], fmt.Sprintf("card %d sits in Backlog", behindCard)) {
+		t.Errorf("the run went %q, want the reason for card %d", got[0], behindCard)
+	}
+	// The boot's line names the card it woke, not the one it refused.
+	if line, ok := auditHas(t, auditFile, "boot"); !ok || line.Card != behindCard || line.Assignee != assigneeMama {
+		t.Errorf("the boot line read as %+v, want the wake for card %d", line, behindCard)
+	}
+	// The refusal is on the record, with both repositories it could not
+	// choose between. Every later look refuses it again, so the file's
+	// first line is the boot look's.
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var miss audit.Miss
+	if err := json.Unmarshal([]byte(strings.Split(strings.TrimSpace(string(raw)), "\n")[0]), &miss); err != nil {
+		t.Fatalf("the dead letter is not a miss: %v", err)
+	}
+	if !strings.Contains(miss.Reason, fmt.Sprintf("two cards on the project answer %d", unsettledCard)) ||
+		!strings.Contains(miss.Reason, repo) || !strings.Contains(miss.Reason, foreignRepo) {
+		t.Errorf("the miss %q does not name the collision it refused", miss.Reason)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
 // TestTheWriteRefusesWhatTheReadCannotPlace pins the two refusals the writer
 // makes before it builds a URL: a number no read placed, and a repository
 // that is not an owner and a name. Neither refusal reaches GitHub — a write
@@ -850,7 +916,7 @@ func TestTheWriteRefusesWhatTheReadCannotPlace(t *testing.T) {
 		repo string
 		want string
 	}{
-		{"a number no read placed", "", "no read placed it"},
+		{"a number no read placed", "", "no read placed card"},
 		{"a repository that is not an owner and a name", "dispatcher", "is not a repository's owner and name"},
 	}
 	for _, c := range cases {

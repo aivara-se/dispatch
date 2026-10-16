@@ -31,14 +31,17 @@ const (
 	repo          = "aivara-se/dispatcher"
 	foreignRepo   = "mnmtanish/dispatcher"
 	unsettledCard = 9
-	backlogReason = "card 9 sits in Backlog with nobody holding it; refine it"
 	assigneeMama  = "thani-sh-mama"
-	behindCard    = 12 // the card behind a number two cards answer
 	fleetJSON     = `{"profile": "mama", "login": "thani-sh-mama"},
 		{"profile": "meme", "login": "thani-sh-meme"},
 		{"profile": "mimi", "login": "thani-sh-mimi"},
 		{"profile": "momo", "login": "thani-sh-momo"}`
 )
+
+// backlogReason is the fixed reason the Backlog rule wakes with, naming the
+// card the way the pass names it: the repository the board gave and its
+// number.
+var backlogReason = fmt.Sprintf("card %s#%d sits in Backlog with nobody holding it; refine it", repo, unsettledCard)
 
 // auditPath puts the audit file where the test's own scratch directory holds
 // it, never in the working tree. The dead-letter file sits beside it, the
@@ -925,18 +928,18 @@ func TestTheConfiguredPathServesTheReceiverAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestTwoCardsWithOneNumberRefuseTheWrite boots a board where two repositories
-// answer one card number — an issue number is the issue's repository's own,
-// and one project can hold both. Here the two repositories share a name and
-// differ only in their owner, which a name alone cannot tell apart; the
-// assign refuses the write instead of guessing the repository the board did
-// not name for the decision, and the miss is dead-lettered with both
-// repositories: the next look repeats, and under no claim does a run start
-// whose assignee never went.
-func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
+// TestTwoCardsOfOneNumberAreEachClaimedAtTheirOwnRepository boots a board
+// where two repositories answer one card number — an issue's number is the
+// issue's repository's own, and one project holds both. Below the read a card
+// is its repository and its number, so each is claimed where the board named
+// it: the Backlog card wakes MaMa at its own repository and the Refined card
+// wakes a developer at the other, in one look, neither is passed over as
+// already claimed, and each run's reason names the card's own repository, so
+// the two runs are told apart.
+func TestTwoCardsOfOneNumberAreEachClaimedAtTheirOwnRepository(t *testing.T) {
 	stub := newStubGitHub()
 	stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
-	stub.put(unsettledCard, stubCard{column: "Backlog", repo: foreignRepo})
+	stub.put(unsettledCard, stubCard{column: "Refined", repo: foreignRepo})
 	github := stub.start(t)
 	auditFile := auditPath(t)
 	argsLog := filepath.Join(t.TempDir(), "args.log")
@@ -948,30 +951,48 @@ func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
 	cancel, done := serveOn(t, configAt(t, addr, theOrgRoute), github, hermes, auditFile)
 	defer cancel()
 
-	deadFile := filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl")
-	until(t, "the refused assign", func() bool {
-		_, err := os.Stat(deadFile)
-		return err == nil
+	until(t, "the two claims", func() bool {
+		return len(stub.assigns()) == 2
 	})
-	raw, err := os.ReadFile(deadFile)
+	for _, want := range []string{
+		"/repos/" + repo + "/issues/" + strconv.Itoa(unsettledCard),
+		"/repos/" + foreignRepo + "/issues/" + strconv.Itoa(unsettledCard),
+	} {
+		found := false
+		for _, call := range stub.assigns() {
+			if strings.HasSuffix(call, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the look wrote %v, want a claim at %s", stub.assigns(), want)
+		}
+	}
+	until(t, "the two runs", func() bool {
+		return len(invocations(t, argsLog)) == 2
+	})
+	for _, line := range invocations(t, argsLog) {
+		switch {
+		case strings.Contains(line, "--profile mama chat -q"):
+			if !strings.Contains(line, fmt.Sprintf("card %s#%d sits in Backlog", repo, unsettledCard)) {
+				t.Errorf("MaMa's run went %q, want the Backlog card's reason, naming its own repository", line)
+			}
+		case strings.Contains(line, "--profile meme chat -q"):
+			if !strings.Contains(line, fmt.Sprintf("card %s#%d sits in Refined", foreignRepo, unsettledCard)) {
+				t.Errorf("meme's run went %q, want the Refined card's reason, naming its own repository", line)
+			}
+		default:
+			t.Errorf("the run is %q, want the two the board calls for", line)
+		}
+	}
+	// The number two cards answer refused nothing: the write is identified by
+	// the repository and the number.
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the dead-letter file: %v", err)
 	}
-	var miss audit.Miss
-	if err := json.Unmarshal(raw, &miss); err != nil {
-		t.Fatalf("the dead letter is not a miss: %v", err)
-	}
-	if !strings.Contains(miss.Reason, "two cards") || !strings.Contains(miss.Reason, repo) || !strings.Contains(miss.Reason, foreignRepo) {
-		t.Errorf("the miss %q does not name the two repositories the number answers", miss.Reason)
-	}
-	// No assign reached the stub, so no issue holds a claim the pass wrote
-	// for a number it could not resolve.
-	if got := stub.assigns(); len(got) != 0 {
-		t.Errorf("the look wrote %+v, want nothing it could not resolve", got)
-	}
-	// And no run is started under it.
-	if got := invocations(t, argsLog); len(got) != 0 {
-		t.Errorf("the run table holds %+v, want one run the write was refused of", got)
+	if strings.TrimSpace(string(raw)) != "" {
+		t.Errorf("the look dead-lettered %s, want no refusal for a number two cards answer", raw)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -979,17 +1000,15 @@ func TestTwoCardsWithOneNumberRefuseTheWrite(t *testing.T) {
 	}
 }
 
-// TestAClaimThatCannotLandStopsNoCardBehindIt boots a board whose number 9 is
-// answered by two repositories and whose card 12 is not. The collision's claim
-// can never land, and the look walks past it: card 12 is claimed and its run
-// starts in that same look, while the refusal is dead-lettered with both
-// repositories named. A card the pass cannot claim costs itself, never the
-// cards behind it.
-func TestAClaimThatCannotLandStopsNoCardBehindIt(t *testing.T) {
+// TestAFinishedCardOfAnotherRepositoryRefusesNothing boots a board where two
+// repositories answer one number and only one of the two cards is work: the
+// Backlog card is claimed at its own repository, and the Finished card of the
+// other repository refuses nothing — its assignee is the record of work done,
+// not a claim on the developer it names.
+func TestAFinishedCardOfAnotherRepositoryRefusesNothing(t *testing.T) {
 	stub := newStubGitHub()
 	stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
-	stub.put(unsettledCard, stubCard{column: "Backlog", repo: foreignRepo})
-	stub.put(behindCard, stubCard{column: "Backlog", repo: repo})
+	stub.put(unsettledCard, stubCard{column: "Finished", assignee: assigneeMama, repo: foreignRepo})
 	github := stub.start(t)
 	auditFile := auditPath(t)
 	argsLog := filepath.Join(t.TempDir(), "args.log")
@@ -1001,42 +1020,24 @@ func TestAClaimThatCannotLandStopsNoCardBehindIt(t *testing.T) {
 	cancel, done := serveOn(t, configAt(t, addr, theOrgRoute), github, hermes, auditFile)
 	defer cancel()
 
-	behind := fmt.Sprintf("/repos/%s/issues/%d", repo, behindCard)
-	until(t, "the claim on the card behind the collision", func() bool {
-		for _, call := range stub.assigns() {
-			if strings.HasSuffix(call, behind) {
-				return true
-			}
-		}
-		return false
+	until(t, "the claim on the Backlog card", func() bool {
+		return len(stub.assigns()) == 1
 	})
-	if got := stub.assigns(); len(got) != 1 {
-		t.Errorf("the boot wrote %+v, want one claim: the card behind the collision", got)
+	if got := stub.assigns(); !strings.HasSuffix(got[0], "/repos/"+repo+"/issues/"+strconv.Itoa(unsettledCard)) {
+		t.Errorf("the look wrote %v, want the claim at %s", got, repo)
 	}
-	until(t, "the run for the card behind the collision", func() bool {
+	until(t, "the run", func() bool {
 		return len(invocations(t, argsLog)) == 1
 	})
-	if got := invocations(t, argsLog); !strings.Contains(got[0], fmt.Sprintf("card %d sits in Backlog", behindCard)) {
-		t.Errorf("the run went %q, want the reason for card %d", got[0], behindCard)
+	if got := invocations(t, argsLog); !strings.Contains(got[0], "--profile mama chat -q") {
+		t.Errorf("the run is %q, want MaMa on the Backlog card", got)
 	}
-	// The boot's line names the card it woke, not the one it refused.
-	if line, ok := auditHas(t, auditFile, "boot"); !ok || line.Card != behindCard || line.Assignee != assigneeMama {
-		t.Errorf("the boot line read as %+v, want the wake for card %d", line, behindCard)
-	}
-	// The refusal is on the record, with both repositories it could not
-	// choose between. Every later look refuses it again, so the file's
-	// first line is the boot look's.
 	raw, err := os.ReadFile(filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the dead-letter file: %v", err)
 	}
-	var miss audit.Miss
-	if err := json.Unmarshal([]byte(strings.Split(strings.TrimSpace(string(raw)), "\n")[0]), &miss); err != nil {
-		t.Fatalf("the dead letter is not a miss: %v", err)
-	}
-	if !strings.Contains(miss.Reason, fmt.Sprintf("two cards on the project answer %d", unsettledCard)) ||
-		!strings.Contains(miss.Reason, repo) || !strings.Contains(miss.Reason, foreignRepo) {
-		t.Errorf("the miss %q does not name the collision it refused", miss.Reason)
+	if strings.TrimSpace(string(raw)) != "" {
+		t.Errorf("the look dead-lettered %s, want the Finished sibling to refuse nothing", raw)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -1045,17 +1046,18 @@ func TestAClaimThatCannotLandStopsNoCardBehindIt(t *testing.T) {
 }
 
 // TestTheWriteRefusesWhatTheReadCannotPlace pins the two refusals the writer
-// makes before it builds a URL: a number no read placed, and a repository
-// that is not an owner and a name. Neither refusal reaches GitHub — a write
-// that went out on either would land wherever the URL happened to point.
+// makes before it builds a URL: a card no read placed, and a repository that
+// is not an owner and a name. Neither refusal reaches GitHub — a write that
+// went out on either would land wherever the URL happened to point.
 func TestTheWriteRefusesWhatTheReadCannotPlace(t *testing.T) {
 	cases := []struct {
-		name string
-		repo string
-		want string
+		name   string
+		placed bool
+		repo   string
+		want   string
 	}{
-		{"a number no read placed", "", "no read placed card"},
-		{"a repository that is not an owner and a name", "dispatcher", "is not a repository's owner and name"},
+		{"a card no read placed", false, repo, "no read placed card"},
+		{"a repository that is not an owner and a name", true, "dispatcher", "is not a repository's owner and name"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1064,12 +1066,12 @@ func TestTheWriteRefusesWhatTheReadCannotPlace(t *testing.T) {
 			theBoard := &bridge{
 				client: board.NewAt(boardToken, github+"/graphql", github),
 				owner:  org,
-				repos:  make(map[int]string),
+				placed: make(map[card]bool),
 			}
-			if c.repo != "" {
-				theBoard.repos[unsettledCard] = c.repo
+			if c.placed {
+				theBoard.placed[card{repo: c.repo, number: unsettledCard}] = true
 			}
-			err := theBoard.Assign(context.Background(), unsettledCard, assigneeMama)
+			err := theBoard.Assign(context.Background(), c.repo, unsettledCard, assigneeMama)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("assign answered %v, want %q", err, c.want)
 			}

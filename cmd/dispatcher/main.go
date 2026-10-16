@@ -51,9 +51,9 @@ func main() {
 }
 
 // run boots the service from args and blocks until ctx is done. A
-// configuration that cannot be decoded, a secret name that resolves to
-// nothing, and log files that cannot be opened all stop the process here,
-// before it serves anything.
+// configuration that cannot be decoded, a fleet that cannot serve the rule,
+// a secret name that resolves to nothing, and log files that cannot be
+// opened all stop the process here, before it serves anything.
 func run(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("dispatcher", flag.ContinueOnError)
 	configPath := flags.String("config", "", "path of the committed configuration file")
@@ -116,7 +116,10 @@ func run(ctx context.Context, args []string) error {
 	runs := runner.New(*hermes, runBound, func(profile string) {
 		pass.OnRunEnd(ctx, profile)
 	})
-	pass = router.New(theBoard, theBoard, runs, logFile, fleet(cfg.Agents))
+	pass, err = router.New(theBoard, theBoard, runs, logFile, fleet(cfg.Agents))
+	if err != nil {
+		return err
+	}
 
 	handler := receiver.New(
 		[]byte(secrets[cfg.Routes[0].Name]),

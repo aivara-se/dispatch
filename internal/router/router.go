@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,8 +76,14 @@ type Router struct {
 
 // New builds the router. login maps each agent's GitHub login to the Hermes
 // profile their run uses, the way the configuration names them: the logins
-// are the configurable half of the fleet, the profiles are the rule's.
-func New(reader Reader, writer Writer, runner Runner, log Logger, login map[string]string) *Router {
+// are the configurable half of the fleet, the profiles are the rule's. A
+// fleet the rule cannot be served by is refused here, where the boot can
+// still stop, and the error names the profile the rule needs and the fleet
+// lacks.
+func New(reader Reader, writer Writer, runner Runner, log Logger, login map[string]string) (*Router, error) {
+	if err := servesRule(login); err != nil {
+		return nil, err
+	}
 	return &Router{
 		reader:    reader,
 		writer:    writer,
@@ -85,7 +92,7 @@ func New(reader Reader, writer Writer, runner Runner, log Logger, login map[stri
 		login:     login,
 		attempted: make(map[int]attempt),
 		now:       time.Now,
-	}
+	}, nil
 }
 
 // attempt is the pass's memory of the action it took for a card: the board
@@ -128,6 +135,27 @@ func (r *Router) OnBoot(ctx context.Context) {
 const refinerProfile = "mama"
 
 var builderProfiles = []string{"meme", "mimi"}
+
+// servesRule refuses a fleet the rule cannot be served by. The rule names one
+// refiner and the builders, and needs at least one of each; a fleet without
+// one of them would boot, read the board, and wake nobody for the cards that
+// role serves — a service smaller than the one the configuration commits to.
+// The error names the profile the rule needs and the fleet lacks.
+func servesRule(login map[string]string) error {
+	carried := make(map[string]bool, len(login))
+	for _, profile := range login {
+		carried[profile] = true
+	}
+	if !carried[refinerProfile] {
+		return fmt.Errorf("the fleet carries no refiner: the rule needs %s", refinerProfile)
+	}
+	for _, profile := range builderProfiles {
+		if carried[profile] {
+			return nil
+		}
+	}
+	return fmt.Errorf("the fleet carries no builder: the rule needs one of %s", strings.Join(builderProfiles, ", "))
+}
 
 // attempts is how many times a look tries a failing action before it
 // dead-letters it (SYSTEMS.md, Failure modes): one immediate retry for a

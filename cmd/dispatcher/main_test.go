@@ -637,7 +637,7 @@ func TestRunRefusesAnAddressAlreadyInUse(t *testing.T) {
 		Owner:   "aivara-se",
 		Project: 2,
 		Board:   "DISPATCHER_BOARD_TOKEN",
-		Agents:  []config.Agent{{Profile: "meme", Login: "thani-sh-meme"}},
+		Agents:  []config.Agent{{Profile: "mama", Login: "thani-sh-mama"}, {Profile: "meme", Login: "thani-sh-meme"}},
 		Routes:  []config.Route{{Name: "org", SecretEnv: "DISPATCHER_WEBHOOK_SECRET"}},
 	}
 	data, err := json.Marshal(cfg)
@@ -672,6 +672,87 @@ func TestRunRefusesTwoRoutes(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "verifies exactly one") {
 		t.Errorf("error %q does not name the one-route limit", err)
+	}
+}
+
+// TestRunStopsAtBootWhenTheFleetCannotServeTheRule boots the real service on
+// a configuration whose fleet the rule cannot be served by. The pass refuses
+// it at boot, the way a secret that resolves to nothing does: the error names
+// the profile the rule needs and the fleet lacks, the board is never read, no
+// claim is written and no run starts.
+func TestRunStopsAtBootWhenTheFleetCannotServeTheRule(t *testing.T) {
+	t.Setenv("DISPATCHER_WEBHOOK_SECRET", webhookSecret)
+	t.Setenv("DISPATCHER_BOARD_TOKEN", boardToken)
+	cases := []struct {
+		name    string
+		agents  []config.Agent
+		missing string
+	}{
+		{
+			"developers and no refiner",
+			[]config.Agent{{Profile: "meme", Login: "thani-sh-meme"}, {Profile: "mimi", Login: "thani-sh-mimi"}},
+			"mama",
+		},
+		{
+			"no developer",
+			[]config.Agent{{Profile: "mama", Login: "thani-sh-mama"}, {Profile: "momo", Login: "thani-sh-momo"}},
+			"builder",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			argsLog := filepath.Join(dir, "args.log")
+			hermes := filepath.Join(dir, "hermes")
+			stubHermes(t, hermes, argsLog)
+			stub := newStubGitHub()
+			stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
+			github := stub.start(t)
+			cfg := config.Config{
+				Addr:    freePort(t),
+				Path:    "/github",
+				Repos:   []string{repo},
+				Events:  []string{"issues", "pull_request", "projects_v2_item"},
+				Owner:   org,
+				Project: 2,
+				Board:   "DISPATCHER_BOARD_TOKEN",
+				Agents:  c.agents,
+				Routes:  []config.Route{{Name: "org", SecretEnv: "DISPATCHER_WEBHOOK_SECRET"}},
+			}
+			data, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "dispatcher.json")
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			auditFile := auditPath(t)
+
+			err = run(context.Background(), []string{
+				"--config", path,
+				"--audit", auditFile,
+				"--github", github,
+				"--hermes", hermes,
+			})
+			if err == nil {
+				t.Fatal("run booted on a fleet the rule cannot be served by")
+			}
+			if !strings.Contains(err.Error(), c.missing) {
+				t.Errorf("the refusal %q does not name %q", err, c.missing)
+			}
+			// The boot stopped before the board or the runner: the look
+			// never ran, so nothing was read, written or started.
+			if got := stub.calls(); len(got) != 0 {
+				t.Errorf("the refused boot asked the board %v", got)
+			}
+			if got := invocations(t, argsLog); len(got) != 0 {
+				t.Errorf("the refused boot started %v", got)
+			}
+			if got := auditLines(t, auditFile); len(got) != 0 {
+				t.Errorf("the refused boot wrote the audit line %+v", got)
+			}
+		})
 	}
 }
 

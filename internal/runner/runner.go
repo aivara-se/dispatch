@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -39,7 +40,6 @@ type run struct {
 	id       string
 	session  string
 	cmd      *exec.Cmd
-	done     chan struct{}
 	exited   bool
 	exitCode int
 }
@@ -81,6 +81,11 @@ func (r *Runner) Start(ctx context.Context, profile, reason string) (runID, sess
 	}
 	session = sess
 	cmd := exec.CommandContext(ctx, r.hermes, "--profile", profile, "chat", "-q", reason)
+	// The child leads its own process group, so a kill reaches the group:
+	// hermes can hatch children of its own, and a run past its bound or
+	// past its context dies with all of them, not just the leader.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
 	if err = cmd.Start(); err != nil {
 		r.mu.Unlock()
 		return "", "", fmt.Errorf("start run for %s: %w", profile, err)
@@ -90,7 +95,6 @@ func (r *Runner) Start(ctx context.Context, profile, reason string) (runID, sess
 		id:      id,
 		session: session,
 		cmd:     cmd,
-		done:    make(chan struct{}),
 	}
 	r.table[profile] = tracked
 	r.mu.Unlock()
@@ -114,7 +118,7 @@ func (r *Runner) reap(tracked *run) {
 	var timer *time.Timer
 	if r.bound > 0 {
 		timer = time.AfterFunc(r.bound, func() {
-			tracked.cmd.Process.Kill()
+			killGroup(tracked.cmd.Process.Pid)
 		})
 	}
 	waitErr := tracked.cmd.Wait()
@@ -124,10 +128,19 @@ func (r *Runner) reap(tracked *run) {
 	r.mu.Lock()
 	tracked.exited = true
 	tracked.exitCode = exitCode(waitErr)
-	close(tracked.done)
 	onEnd := r.onEnd
 	r.mu.Unlock()
 	onEnd(tracked.profile)
+}
+
+// killGroup kills the child's whole process group and reports the kill. A
+// group that is already gone kills nothing, which is not an error.
+func killGroup(pgid int) error {
+	err := syscall.Kill(-pgid, syscall.SIGKILL)
+	if err == syscall.ESRCH {
+		return nil
+	}
+	return err
 }
 
 // exitCode is the child's exit code: zero for a clean exit, the process's

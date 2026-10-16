@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -150,7 +151,7 @@ func TestDeadChildRecordsItsExitCode(t *testing.T) {
 }
 
 func TestRunPastItsBoundDies(t *testing.T) {
-	hermes, _, _ := stubHermes(t)
+	hermes, _, dir := stubHermes(t)
 	t.Setenv("STUB_SLEEP", "30")
 	ended := make(chan string, 4)
 	r := New(hermes, 200*time.Millisecond, func(profile string) { ended <- profile })
@@ -165,6 +166,107 @@ func TestRunPastItsBoundDies(t *testing.T) {
 	if r.Running("mimi") {
 		t.Fatal("profile still reads as running after its bound killed it")
 	}
+	// The bound kills the child's whole process group: a run past its bound
+	// dies with the grandchild the stub hatched, not just the leader. Poll
+	// the process table for a survivor of the group and fail on one.
+	pgid := r.leader("mimi")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		survivors := groupSurvivors(t, pgid, dir)
+		if len(survivors) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the bound left %d survivor(s) of the run's group: %v", len(survivors), survivors)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestTheRunChildLeadsItsOwnProcessGroup(t *testing.T) {
+	hermes, _, dir := stubHermes(t)
+	if err := os.WriteFile(filepath.Join(dir, "hold"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan string, 4)
+	r := New(hermes, 0 /* no bound */, func(profile string) { ended <- profile })
+	if _, _, err := r.Start(context.Background(), "mimi", "wake"); err != nil {
+		t.Fatal(err)
+	}
+	// The child leads its own process group, which is what lets a kill to
+	// the group reach the grandchild it hatched. Asserted while it is held
+	// alive: a child that kept its parent's group reads as that group.
+	leader := r.leader("mimi")
+	if pgrp := childPgrp(t, leader); pgrp != leader {
+		t.Fatalf("child %d runs in group %d, want it to lead its own group", leader, pgrp)
+	}
+	if err := os.Remove(filepath.Join(dir, "hold")); err != nil {
+		t.Fatal(err)
+	}
+	waitEnd(t, ended, "mimi")
+}
+
+// leader is the run's process group id: the pid of the child that leads it.
+func (r *Runner) leader(profile string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.table[profile].cmd.Process.Pid
+}
+
+// childPgrp is the process group a live child belongs to, straight from
+// /proc. A child that kept its parent's group reads as that group, not its
+// own pid.
+func childPgrp(t *testing.T, pid int) (pgrp int) {
+	t.Helper()
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		t.Fatal(err) // a child this test just started is always in /proc
+	}
+	stat := string(raw)
+	fields := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:])
+	pgrp, err = strconv.Atoi(fields[2]) // state, ppid, pgrp
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pgrp
+}
+
+// groupSurvivors lists the processes still alive in the run's process group.
+// A group the bound failed to kill keeps entries here after the onEnd that
+// ended the test's wait: the leader gone, the survivors reparented but the
+// group not. The group id is a fresh pid, so nothing else on the machine
+// shares it; the command-line check keeps the count honest across pid reuse.
+func groupSurvivors(t *testing.T, pgid int, dir string) (survivors []int) {
+	t.Helper()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue // not a pid directory
+		}
+		raw, err := os.ReadFile("/proc/" + entry.Name() + "/stat")
+		if err != nil {
+			continue // a process that ended between the two reads
+		}
+		stat := string(raw)
+		fields := strings.Fields(stat[strings.LastIndexByte(stat, ')')+1:])
+		pgrp, err := strconv.Atoi(fields[2]) // state, ppid, pgrp
+		if err != nil || pgrp != pgid {
+			continue
+		}
+		cmdline, err := os.ReadFile("/proc/" + entry.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		args := string(bytes.ReplaceAll(cmdline, []byte{0}, []byte{' '}))
+		if strings.Contains(args, dir) || strings.HasPrefix(strings.TrimSpace(args), "sleep ") {
+			survivors = append(survivors, pid)
+		}
+	}
+	return survivors
 }
 
 func TestEveryRunEndFiresOnEndExactlyOnce(t *testing.T) {

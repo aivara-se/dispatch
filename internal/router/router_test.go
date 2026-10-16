@@ -241,6 +241,22 @@ func TestRefinedCardsGoToAFreeDeveloperEach(t *testing.T) {
 	}
 }
 
+func TestAFinishedCardIsNoDevelopersHold(t *testing.T) {
+	router, board, runner, _, _ := boot([]board.Card{
+		{Number: 69, Column: "Finished", Assignee: "thani-sh-meme"},
+		{Number: 70, Column: "Finished", Assignee: "thani-sh-mimi"},
+		{Number: 71, Column: "Finished", Assignee: "thani-sh-meme"},
+		{Number: 100, Column: "Refined"},
+	})
+	router.OnBoot(context.Background())
+	if got := board.assigns; !reflect.DeepEqual(got, []string{"100 thani-sh-meme"}) {
+		t.Errorf("the claims were %v, want meme's claim on card 100", got)
+	}
+	if len(runner.started) != 1 || runner.started[0].profile != "meme" {
+		t.Errorf("the pass started %+v, want meme on card 100", runner.started)
+	}
+}
+
 func TestARefinedCardWaitsWhenNoDeveloperIsFree(t *testing.T) {
 	router, board, runner, stub, _ := boot([]board.Card{
 		{Number: 80, Column: "Refined"},

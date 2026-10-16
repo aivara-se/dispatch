@@ -183,7 +183,11 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 
 	held := make(map[string]bool)
 	for _, card := range cards {
-		if card.Assignee != "" {
+		// A hold is what PRODUCT fixes it as: one card per developer until
+		// its pull request merges, and the merge is what moves it to
+		// Finished. A Finished card's assignee is the record of work done,
+		// not a claim on the developer it names.
+		if card.Assignee != "" && (card.Column == "Refined" || card.Column == "Started") {
 			held[card.Assignee] = true
 		}
 	}
@@ -369,9 +373,9 @@ func (r *Router) claim(asks []need, held map[string]bool, at time.Time) []wake {
 }
 
 // freeBuilder is the free developer this look assigns: a builder in the
-// fleet, holding no card on the board, without a run in flight, and not
-// already decided by the look. The first by login wins, so a look is
-// decided the same way every time.
+// fleet, holding no card in Refined or Started, without a run in flight,
+// and not already decided by the look. The first by login wins, so a look
+// is decided the same way every time.
 func (r *Router) freeBuilder(held map[string]bool, decided map[string]bool) (string, string, bool) {
 	var free []string
 	for _, profile := range builderProfiles {

@@ -40,7 +40,7 @@ The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitH
 ## Starting a run
 
 - **The requirement**: start one bounded run of the named agent's own profile, hand it the reason, and know while it is running.
-- **The mechanism**: the runner launches that profile's agent as a child process of the service — the Hermes CLI on the profile, `hermes --profile <bot> chat -q "<reason>"` — and tracks the child: running, exited, its exit code and its last output. The run is the profile's own: its prompt, skills, memory and delivery come from the profile, and the dispatcher adds only the reason.
+- **The mechanism**: the runner launches that profile's agent as a child process of the service — the Hermes CLI on the profile, `hermes --profile <bot> chat -q "<reason>"` — and tracks the child: running, exited, and its exit code. The run is the profile's own: its prompt, skills, memory and delivery come from the profile, and the dispatcher adds only the reason.
 - **One run per agent**: the runner starts no second run for a profile that already has one, and the run table is what it reconciles against after a restart.
 - **The reason** is the run's input and nothing else: identifiers, and a sentence the service wrote. Text a third party wrote never reaches it (`ADR 009`), because the reason is an argument to a program that holds tools and credentials.
 

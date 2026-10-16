@@ -51,6 +51,9 @@ func TestBadSignatureIs401(t *testing.T) {
 	if rec := deliver(t, h, "issues", "delivery-1", "wrong-secret", body); rec.Code != 401 {
 		t.Fatalf("wrong secret: got %d, want 401", rec.Code)
 	}
+	if rec := deliver(t, h, "issues", "delivery-3", "wrong-secret", "not json"); rec.Code != 401 {
+		t.Fatalf("bad signature on unparsable body: got %d, want 401", rec.Code)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/github", strings.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "issues")
 	req.Header.Set("X-GitHub-Delivery", "delivery-2")

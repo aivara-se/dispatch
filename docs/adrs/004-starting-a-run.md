@@ -8,7 +8,7 @@
 
 **The child process is the mechanism.** The runner launches `hermes --profile <bot> chat -q "<reason>"` as a child of the service and tracks it: running, exited, and its exit code. The run is the profile's own — its prompt, its skills, its memory and its delivery come from the profile — and the dispatcher adds only the reason.
 
-- **One run per agent.** The runner starts no second run for a profile that already has one, and its own run table is what it reconciles against after a restart ([008](008-the-service-acts-on-the-board.md)).
+- **One run per agent.** The runner starts no second run for a profile that already has one, and its own run table is what it reconciles against; what the table is, and what it holds at boot, is [008](008-the-service-acts-on-the-board.md)'s.
 - **The reason is the run's only input.** It says *why now*, and the agent re-reads the board and the pull request. That is what makes a wake that is early, late or duplicated harmless, and it is why the service never sends the work itself. What may be in it is [009](009-the-reason-carries-no-third-party-text.md).
 
 ## Consequences

@@ -4,7 +4,7 @@ A Go service that receives GitHub's deliveries for the `aivara-se` organisation 
 
 ## Current Project Focus
 
-The design is settled and the code has not started. Land the foundation first — `cmd/dispatcher`, the config, the audit log, the frozen package interfaces (the state pass of [`008`](docs/adrs/008-the-service-acts-on-the-board.md) and its run table among them) and the gate — then write the receiver, the board, the router and the runner in parallel: each owns one package and edits nothing of the foundation.
+The service is built and its gate is green on `main`. What is left is the live cutover ([`#74`](https://github.com/aivara-se/dispatcher/issues/74)) — the systemd unit, the Caddy path and the first real delivery — and the pass's own gap ([`#65`](https://github.com/aivara-se/dispatcher/issues/65)): the change marker its per-card record reads, and a boot rebuild of the run table that admits neither a phantom run nor a dropped live child. Both cards sit in `Refined`.
 
 This section is steering, not policy. It is the one place where what matters right now outranks the standing rules below, it changes often, and it is replaced rather than appended to. Keep it short enough to read in full, and current enough to be worth reading.
 
@@ -34,7 +34,7 @@ go test ./...
 
 Run the whole sequence, not just its fast part, and read every result — the exit code of the last command says nothing about the first.
 
-These three are the gate `docs/SYSTEMS.md` (*Checks*) fixes, and CI (`.github/workflows/checks.yml`) will run them. **Until the packages exist there is no code to check** — `README.md` (*Checks*) states what this module prints today, and the documents are the current work; a check that pretended to verify them would be a placeholder. Until then a reviewer covers what no machine can see: that every relative link in a document resolves to a file in the tree, that no unfilled slot survives, and that each ADR's Consequences says what its choice costs and not only what it buys.
+These three are the gate `docs/SYSTEMS.md` (*Checks*) fixes, and CI (`.github/workflows/checks.yml`) runs them on every pull request and on `main`. What no machine can see, a reviewer covers: that every relative link in a document resolves to a file in the tree, that no unfilled slot survives, and that each ADR's Consequences says what its choice costs and not only what it buys.
 
 ## Version Control
 
@@ -52,6 +52,6 @@ These three are the gate `docs/SYSTEMS.md` (*Checks*) fixes, and CI (`.github/wo
 - `docs/adrs/`: one decision per file; merged into `main` means Accepted
 - `AGENTS.md`: the entry file an agent reads first
 - `README.md` (how it builds and runs, and where the documents are), `go.mod`, `.gitignore`
-- Once the foundation's code lands: `cmd/dispatcher/` (the binary), `internal/{receiver,board,router,runner}/` (the four parts), `internal/{config,audit}/` (what it loads and what it writes), and `.github/workflows/checks.yml` (CI)
+- `cmd/dispatcher/` (the binary), `internal/{receiver,board,router,runner}/` (the four parts), `internal/{config,audit}/` (what it loads and what it writes), and `.github/workflows/checks.yml` (CI)
 
 New markdown goes in the directory that already owns its subject, and a fact has exactly one home. Never add a second copy of something a document already says; link to it. If a path in the map above stops being true, fix the map in the same pull request. A map that lies is worse than no map.

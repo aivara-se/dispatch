@@ -66,5 +66,5 @@ v1 is done when each of these holds, and each is checkable by the operator.
 - A card whose wake never started a run is woken again at the next look, and a card no claim landed on is asked again by every look, the boot look included; a card whose claim the board carries is not claimed twice — a run that ended without moving it leaves it to its agent, and a `Started` card is the one whose promised run a restart starts again.
 - A review request wakes the named reviewer; a merge wakes MaMa; no agent is woken for the delivery it made. One look may wake more than one agent, because a look answers for every card it reads — and a card an agent opened is still a card, so a look wakes its assignee for it like any other.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
-- A run the service could not start is dead-lettered rather than dropped.
+- A run the service could not start is refused and recorded rather than dropped; its reason is on the service's journal.
 - The audit log answers, for any delivery, whether an agent was started and, when not, why — and, for any card, what its runs cost.

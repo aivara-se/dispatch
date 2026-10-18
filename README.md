@@ -13,7 +13,7 @@ go build ./cmd/dispatcher     # ./dispatcher, in the repository root
 
 Go 1.26 or newer, standard library only — the module carries no requires ([`001`](docs/adrs/001-go-and-the-standard-library.md)).
 
-The audit file defaults to `dispatcher-audit.jsonl` in the working directory, its dead-letter sibling beside it; `--audit` sets the path and `--max-bytes` the size each file rotates at.
+The audit file defaults to `dispatcher-audit.jsonl` in the working directory; `--audit` sets the path and `--max-bytes` the size it rotates at.
 
 ## Checks
 

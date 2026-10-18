@@ -57,8 +57,8 @@ func main() {
 func run(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("dispatcher", flag.ContinueOnError)
 	configPath := flags.String("config", "", "path of the committed configuration file")
-	auditPath := flags.String("audit", "dispatcher-audit.jsonl", "path of the audit file; the dead-letter file sits beside it")
-	maxBytes := flags.Int64("max-bytes", 10<<20, "size each log file rotates at, in bytes")
+	auditPath := flags.String("audit", "dispatcher-audit.jsonl", "path of the audit file")
+	maxBytes := flags.Int64("max-bytes", 10<<20, "size the audit file rotates at, in bytes")
 	hermes := flags.String("hermes", "hermes", "path of the Hermes binary a run launches")
 	github := flags.String("github", "https://api.github.com", "base of GitHub's API; the integration points a boot's board at a stub server")
 	if err := flags.Parse(args); err != nil {
@@ -184,7 +184,7 @@ func (b *bridge) ReadAll(ctx context.Context) ([]board.Card, error) {
 // — at the issue the card's identity names, the repository the read before it
 // placed the card in. A card no read placed has no repository the board named
 // for it, and the write is refused rather than pointed at a guess. The
-// router's own miss names the card; these words carry the reason alone.
+// router's own refusal names the card; these words carry the reason alone.
 func (b *bridge) Assign(ctx context.Context, repo string, number int, login string) error {
 	if !b.placed[card{repo: repo, number: number}] {
 		return fmt.Errorf("no read placed card %d of %q, so the repository to write is unknown", number, repo)

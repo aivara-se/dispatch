@@ -2,7 +2,6 @@
 /dispatcher
 
 # What the service writes down, when the configuration points a path at the
-# repository root: the audit log, and the dead-letter file. Anchored, so neither
-# pattern reaches a package or a fixture.
+# repository root: the audit log. Anchored, so the pattern reaches no package
+# or fixture.
 /*.jsonl
-/dead-letter*

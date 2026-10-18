@@ -155,7 +155,7 @@ func (s *stubRunner) Start(ctx context.Context, profile, reason string) (string,
 	}
 	s.running[profile] = true
 	s.started = append(s.started, stubRun{profile: profile, reason: reason})
-	return profile + "-run-1", profile + "-session-1", nil
+	return profile + "-run-1", profile + "-tag-1", nil
 }
 
 func (s *stubRunner) Running(profile string) bool {
@@ -285,7 +285,7 @@ func TestABacklogCardWakesItsRefinerOncePerLook(t *testing.T) {
 		Card:     5,
 		Assignee: "thani-sh-mama",
 		Run:      "mama-run-1",
-		Session:  "mama-session-1",
+		Tag:      "mama-tag-1",
 	}
 	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
 		t.Errorf("the log read as %+v, want %+v", got, []audit.Line{wantLine})
@@ -308,7 +308,7 @@ func TestADeliveryIsAnsweredOnTheLook(t *testing.T) {
 		Card:       72,
 		Assignee:   "thani-sh-meme",
 		Run:        "meme-run-1",
-		Session:    "meme-session-1",
+		Tag:        "meme-tag-1",
 		Answer:     http.StatusAccepted,
 	}
 	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
@@ -620,7 +620,7 @@ func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
 		Card:       9,
 		Assignee:   "thani-sh-mama",
 		Run:        "mama-run-1",
-		Session:    "mama-session-1",
+		Tag:        "mama-tag-1",
 		Answer:     http.StatusBadGateway, // the refusal refuses the look back
 	}
 	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {

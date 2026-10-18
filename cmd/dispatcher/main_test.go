@@ -285,11 +285,14 @@ func answerIssue(w http.ResponseWriter, card stubCard) {
 // The stub Hermes agent: an executable standing in for the child a run
 // starts, recording its arguments and sleeping what STUB_SLEEP names.
 
-// stubHermes writes the stub agent script at path.
+// stubHermes writes the stub agent script at path. The script records the
+// arguments of each invocation and the run tag it was started with in its own
+// environment, so a test can read the DISPATCHER_RUN value the run carried.
 func stubHermes(t *testing.T, path, argsLog string) {
 	t.Helper()
 	script := `#!/bin/sh
 echo "$@" >> "` + argsLog + `"
+echo "$DISPATCHER_RUN" >> "` + argsLog + `.tag"
 sleep "${STUB_SLEEP:-0}"
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
@@ -301,6 +304,26 @@ sleep "${STUB_SLEEP:-0}"
 func invocations(t *testing.T, argsLog string) []string {
 	t.Helper()
 	raw, err := os.ReadFile(argsLog)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// carriedTags reads the run tag each stub invocation carried in its own
+// environment, one per line: the DISPATCHER_RUN value the run's process saw.
+func carriedTags(t *testing.T, argsLog string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(argsLog + ".tag")
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -505,16 +528,22 @@ func TestRunBootsWithTheFixtureConfig(t *testing.T) {
 	if got := byLine[0]; !strings.Contains(got, "--profile mama chat -q") || !strings.Contains(got, backlogReason) {
 		t.Errorf("the run went %q, want the fixed Backlog reason for card %d", got, unsettledCard)
 	}
-	// The audit's first line is the boot look's wake, with the run and
-	// session ids it started.
+	// The audit's first line is the boot look's wake, with the run id and
+	// the tag it started the run with.
 	lines := auditLines(t, auditFile)
 	if len(lines) == 0 {
 		t.Fatal("the audit holds no line")
 	}
 	got := lines[0]
 	if got.Trigger != "boot" || got.Card != unsettledCard || got.Assignee != assigneeMama ||
-		got.Run == "" || got.Session == "" {
-		t.Errorf("the boot's audit line is %+v, want the wake with its run and session", got)
+		got.Run == "" || got.Tag == "" {
+		t.Errorf("the boot's audit line is %+v, want the wake with its run and tag", got)
+	}
+	// The tag the line holds is the value the run's own process carries in
+	// DISPATCHER_RUN, not a name the service keeps to itself.
+	carried := carriedTags(t, argsLog)
+	if len(carried) != 1 || carried[0] == "" || got.Tag != carried[0] {
+		t.Errorf("the audit line's tag is %q, want the run's own DISPATCHER_RUN value %v", got.Tag, carried)
 	}
 	// The GraphQL page was asked for the configured owner and project.
 	// Both surfaces carry the token, which the stub verifies.

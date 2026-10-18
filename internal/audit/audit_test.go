@@ -39,7 +39,7 @@ func TestAppendWritesOneJSONLinePerLook(t *testing.T) {
 	log, path := open(t, 1<<20)
 	records := []Line{
 		{Trigger: "boot", Decision: "woken meme for card 69"},
-		{Trigger: "delivery", Deliveries: []string{"d-1"}, Decision: "assigned", Card: 69, Assignee: "thani-sh-meme", Run: "run-1", Session: "sess-1", Answer: 202},
+		{Trigger: "delivery", Deliveries: []string{"d-1"}, Decision: "assigned", Card: 69, Assignee: "thani-sh-meme", Run: "run-1", Tag: "tag-1", Answer: 202},
 	}
 	for _, record := range records {
 		if err := log.Append(record); err != nil {

@@ -16,8 +16,8 @@
 5. The delivery id is checked against the cache. A delivery already seen is answered `202` and starts nothing.
 6. The router works out which agents the fact concerns. It reads the board for what the delivery cannot state — a card's column and its assignee — and the run table for whether a run is in flight.
 7. Where the rule assigns a card, the write happens before the run: the assignee is written, and a write that fails fails the delivery.
-8. The runner starts the target agent's run with the reason, and records the run — its profile, what it concerns, and the session id it started.
-9. One audit line is appended for every look, whatever happened: the trigger — a delivery that passed verification, a run ending, or boot — the delivery ids where there were any, the decision, the card the run concerns where it concerns one, the assignee it wrote, the run and its session id, and the answer the sender was given where there was one.
+8. The runner starts the target agent's run with the reason, and records the run — its profile, what it concerns, and the tag it started the run with, the value the run's own process carries in `DISPATCHER_RUN`.
+9. One audit line is appended for every look, whatever happened: the trigger — a delivery that passed verification, a run ending, or boot — the delivery ids where there were any, the decision, the card the run concerns where it concerns one, the assignee it wrote, the run and its tag, and the answer the sender was given where there was one.
 
 The inbound headers read are `X-Hub-Signature-256`, `X-GitHub-Event` and `X-GitHub-Delivery`. The answer set is the service's own (`ADR 006`): `202` accepted — acted on, or seen and deliberately not; `400` a body that is not the JSON the signature covered; `401` a missing or non-verifying signature; `404` a path served by nobody; `413` the body limit; `429` the inbound rate limit, whose limit, window and order against the audit append are `ADR 006`'s; `502` the call or the run the delivery needed failed.
 

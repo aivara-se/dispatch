@@ -12,8 +12,10 @@ import (
 
 // Line is one look's record: the trigger that caused it, the deliveries it
 // carried, the decision made, the card and the assignee it concerns, the run
-// it started with its session, and the answer the sender got. A zero field
-// means the thing was absent, and is written as absent.
+// it started with its tag, and the answer the sender got. A zero field
+// means the thing was absent, and is written as absent. The tag is the run's
+// own handle: the value the service started the run with, the one
+// DISPATCHER_RUN carries in that run's own process.
 type Line struct {
 	Trigger    string   `json:"trigger,omitempty"`
 	Deliveries []string `json:"deliveries,omitempty"`
@@ -21,7 +23,7 @@ type Line struct {
 	Card       int      `json:"card,omitempty"`
 	Assignee   string   `json:"assignee,omitempty"`
 	Run        string   `json:"run,omitempty"`
-	Session    string   `json:"session,omitempty"`
+	Tag        string   `json:"tag,omitempty"`
 	Answer     int      `json:"answer,omitempty"`
 }
 

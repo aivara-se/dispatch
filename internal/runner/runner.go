@@ -26,11 +26,11 @@ import (
 )
 
 // runTag is the environment variable the runner sets on every child it
-// starts. Its value is the run's session id — the sixteen random bytes the
-// service minted for it, held by no other process — and its presence in a
-// live process's environment is where a boot reads that the process is this
-// service's own run (proc(5): `/proc/[pid]/environ` holds the environment a
-// process was started with).
+// starts. Its value is the run's tag — the sixteen random bytes the service
+// minted for it, held by no other process, and the value the audit line
+// records — and its presence in a live process's environment is where a boot
+// reads that the process is this service's own run (proc(5) holds a process's
+// environment at `/proc/[pid]/environ`).
 const runTag = "DISPATCHER_RUN"
 
 // procRoot is the process table a boot reads to find the runs that outlived
@@ -56,11 +56,11 @@ type Runner struct {
 }
 
 // run is one tracked child: the profile it runs as, the local run id, the
-// session id the audit line records, and the child's end.
+// tag the audit line records, and the child's end.
 type run struct {
 	profile  string
 	id       string
-	session  string
+	tag      string
 	cmd      *exec.Cmd
 	exited   bool
 	exitCode int
@@ -82,32 +82,29 @@ func New(hermes string, bound time.Duration, onEnd func(string)) *Runner {
 // Start starts the profile's run with the reason, and records it. The reason
 // is the run's only input, passed as the child's single question argument; it
 // holds identifiers and the service's own words, never third-party text. A
-// wake for a profile that already has a run returns that run's ids and starts
-// nothing. A run that cannot be started is an error, and fires no end.
-func (r *Runner) Start(ctx context.Context, profile, reason string) (runID, session string, err error) {
+// wake for a profile that already has a run returns that run's id and tag and
+// starts nothing. A run that cannot be started is an error, and fires no end.
+func (r *Runner) Start(ctx context.Context, profile, reason string) (runID, tag string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", fmt.Errorf("start run for %s: %w", profile, err)
 	}
 	r.mu.Lock()
 	if live, ok := r.table[profile]; ok && !live.exited {
-		id, sess := live.id, live.session
 		r.mu.Unlock()
-		return id, sess, nil
+		return live.id, live.tag, nil
 	}
 	r.seq++
 	id := fmt.Sprintf("%s-%d", profile, r.seq)
-	sess, err := newSession()
+	tag, err = newTag()
 	if err != nil {
 		r.mu.Unlock()
 		return "", "", fmt.Errorf("start run for %s: %w", profile, err)
 	}
-	session = sess
 	cmd := exec.CommandContext(ctx, r.hermes, "--profile", profile, "chat", "-q", reason)
 	// The child carries the run tag in its environment, so a boot after a
 	// stop that left it alive recognises it as this service's own run and
-	// ends it. The tag's value is the run's session id, the handle the
-	// audit line already records.
-	cmd.Env = append(os.Environ(), runTag+"="+session)
+	// ends it. The tag is the value the audit line records for the run.
+	cmd.Env = append(os.Environ(), runTag+"="+tag)
 	// The child leads its own process group, so a kill reaches the group:
 	// hermes can hatch children of its own, and a run past its bound or
 	// past its context dies with all of them, not just the leader.
@@ -120,13 +117,13 @@ func (r *Runner) Start(ctx context.Context, profile, reason string) (runID, sess
 	tracked := &run{
 		profile: profile,
 		id:      id,
-		session: session,
+		tag:     tag,
 		cmd:     cmd,
 	}
 	r.table[profile] = tracked
 	r.mu.Unlock()
 	go r.reap(tracked)
-	return id, session, nil
+	return id, tag, nil
 }
 
 // Running reports whether the profile has a run in flight. A run that ended —
@@ -170,7 +167,7 @@ func (r *Runner) Recover() (int, error) {
 // processes under proc that carry the run tag in their environment, name the
 // Hermes binary this runner launches in their command line, and lead their
 // own process group. The tag is what marks a process as the service's own
-// run — its value is the session the service minted — and the command line's
+// run — its value is the tag the service minted — and the command line's
 // `--profile` names the profile it runs; the binary name keeps the
 // recognition to this service's children. A child that forked without
 // exec'ing keeps its parent's command line and group, so the leader — the
@@ -306,12 +303,12 @@ func exitCode(waitErr error) int {
 	return -1
 }
 
-// newSession mints the session id the audit line records for a run. It is the
-// service's own handle for the run, sixteen random bytes as hex.
-func newSession() (string, error) {
+// newTag mints the tag the audit line records for a run: the value the run's
+// own process carries in its environment, sixteen random bytes as hex.
+func newTag() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return "", fmt.Errorf("mint session: %w", err)
+		return "", fmt.Errorf("mint tag: %w", err)
 	}
 	return hex.EncodeToString(raw[:]), nil
 }

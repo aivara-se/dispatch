@@ -52,11 +52,11 @@ type Writer interface {
 }
 
 // Runner is the run table the pass asks whether a run is in flight, and
-// where it starts one. Start answers the run and session ids, so the audit
+// where it starts one. Start answers the run id and its tag, so the audit
 // line records what the look started; Running is the fact the rule's
 // "is it already happening" turns on.
 type Runner interface {
-	Start(ctx context.Context, profile, reason string) (run, session string, err error)
+	Start(ctx context.Context, profile, reason string) (run, tag string, err error)
 	Running(profile string) bool
 }
 
@@ -285,7 +285,7 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 					continue
 				}
 			}
-			run, session, err := tryBuild(func() (string, string, error) { return r.runner.Start(ctx, call.profile, call.reason) })
+			run, tag, err := tryBuild(func() (string, string, error) { return r.runner.Start(ctx, call.profile, call.reason) })
 			if err != nil {
 				failed = true
 				// The claim was written and the run never went: the record says
@@ -305,7 +305,7 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 				Card:       call.card.Number,
 				Assignee:   call.login,
 				Run:        run,
-				Session:    session,
+				Tag:        tag,
 			})
 		}
 	}
@@ -560,12 +560,12 @@ func tryOnce(op func() error) error {
 // tryBuild tries starting the run, up to attempts times. The runner's
 // error means nothing started, so a retried start cannot spawn twice.
 func tryBuild(op func() (string, string, error)) (string, string, error) {
-	var run, session string
+	var run, tag string
 	var err error
 	for range attempts {
-		run, session, err = op()
+		run, tag, err = op()
 		if err == nil {
-			return run, session, nil
+			return run, tag, nil
 		}
 	}
 	return "", "", err

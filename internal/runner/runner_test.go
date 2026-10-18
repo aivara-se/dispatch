@@ -84,6 +84,35 @@ func TestReasonIsTheOnlyInput(t *testing.T) {
 	}
 }
 
+// A run's tag is not a name the service keeps to itself: it is the value the
+// run's own process carries in DISPATCHER_RUN, the value a boot reads to
+// recognise a run that outlived the service. The tag Start answers with is
+// that same value, so the audit line's tag joins the wake to its process.
+func TestTheTagIsTheValueTheChildCarries(t *testing.T) {
+	hermes, _, dir := stubHermes(t)
+	if err := os.WriteFile(filepath.Join(dir, "hold"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan string, 4)
+	r := New(hermes, time.Minute, func(profile string) { ended <- profile })
+	_, tag, err := r.Start(context.Background(), "mimi", "wake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag == "" {
+		t.Fatal("Start answered an empty tag")
+	}
+	leader := r.leader("mimi")
+	waitTagged(t, leader)
+	if got := childTag(t, leader); got != tag {
+		t.Fatalf("the child carries %s=%q, want the tag Start answered %q", runTag, got, tag)
+	}
+	if err := os.Remove(filepath.Join(dir, "hold")); err != nil {
+		t.Fatal(err)
+	}
+	waitEnd(t, ended, "mimi")
+}
+
 func TestConcurrentWakesCollapseToOneRun(t *testing.T) {
 	hermes, argsLog, dir := stubHermes(t)
 	if err := os.WriteFile(filepath.Join(dir, "hold"), nil, 0o644); err != nil {
@@ -95,13 +124,13 @@ func TestConcurrentWakesCollapseToOneRun(t *testing.T) {
 	const wakes = 8
 	var wg sync.WaitGroup
 	ids := make([]string, wakes)
-	sessions := make([]string, wakes)
+	tags := make([]string, wakes)
 	errs := make([]error, wakes)
 	for i := 0; i < wakes; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ids[i], sessions[i], errs[i] = r.Start(context.Background(), "mimi", "wake")
+			ids[i], tags[i], errs[i] = r.Start(context.Background(), "mimi", "wake")
 		}(i)
 	}
 	wg.Wait()
@@ -109,8 +138,8 @@ func TestConcurrentWakesCollapseToOneRun(t *testing.T) {
 		if errs[i] != nil {
 			t.Fatal(errs[i])
 		}
-		if ids[i] != ids[0] || sessions[i] != sessions[0] {
-			t.Fatalf("wake %d returned (%q, %q), want the one run (%q, %q)", i, ids[i], sessions[i], ids[0], sessions[0])
+		if ids[i] != ids[0] || tags[i] != tags[0] {
+			t.Fatalf("wake %d returned (%q, %q), want the one run (%q, %q)", i, ids[i], tags[i], ids[0], tags[0])
 		}
 	}
 	if !r.Running("mimi") {
@@ -330,6 +359,23 @@ func waitTagged(t *testing.T, pid int) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("run %d never read with a %s tag; a boot could not recognise it", pid, runTag)
+}
+
+// childTag is the value a live process carries in the run tag, straight from
+// its own environment, or "" when it carries none.
+func childTag(t *testing.T, pid int) string {
+	t.Helper()
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := runTag + "="
+	for _, entry := range strings.Split(string(raw), "\x00") {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix)
+		}
+	}
+	return ""
 }
 
 // alive reports whether a process is still in the process table.

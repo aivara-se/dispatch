@@ -129,6 +129,16 @@ func run(ctx context.Context, args []string) error {
 			return pass.OnDelivery(ctx, delivery)
 		},
 	)
+	// A stop that did not cancel this context — a crash, or a failure
+	// restart — left each live run's child reparented and still running. End
+	// them before the boot look decides anything, so no profile runs twice:
+	// a surviving child is a run no table holds (ADR 004, ADR 008). A stop
+	// that cancelled the context left nothing to find.
+	if reaped, err := runs.Recover(); err != nil {
+		return err
+	} else if reaped > 0 {
+		log.Printf("dispatcher: reaped %d run(s) that outlived the service", reaped)
+	}
 	return serve(ctx, cfg, handler, func() { pass.OnBoot(ctx) })
 }
 

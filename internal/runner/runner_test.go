@@ -305,6 +305,129 @@ func TestAFailedStartFiresNoEnd(t *testing.T) {
 	}
 }
 
+// tagged reports whether a live process's environment carries the run tag,
+// straight from the process table.
+func tagged(t *testing.T, pid int) bool {
+	t.Helper()
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return carriesTag(raw)
+}
+
+// waitTagged waits, bounded, for a live process's environment to read with
+// the run tag. A child that has only just exec'd can read an empty
+// environment for a moment after Start returns; a survivor a boot finds has
+// been up long enough that the read is settled.
+func waitTagged(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if tagged(t, pid) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("run %d never read with a %s tag; a boot could not recognise it", pid, runTag)
+}
+
+// alive reports whether a process is still in the process table.
+func alive(pid int) bool {
+	_, err := os.Stat("/proc/" + strconv.Itoa(pid))
+	return err == nil
+}
+
+// A run that outlived the service — a SIGKILL, or a failure restart, since a
+// clean stop cancels the boot's context — is a run no table holds. The next
+// boot recognises it by the run tag its child carries and ends its group
+// before its first look, so the profile is free and the boot look's own run
+// is the only one.
+func TestARunThatOutlivedTheServiceIsReapedAtBoot(t *testing.T) {
+	hermes, _, dir := stubHermes(t)
+	if err := os.WriteFile(filepath.Join(dir, "hold"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The service that started the run: a crash never cancels its context,
+	// so the child outlives it.
+	old := New(hermes, 0 /* no bound */, func(string) {})
+	if _, _, err := old.Start(context.Background(), "mimi", "wake"); err != nil {
+		t.Fatal(err)
+	}
+	leader := old.leader("mimi")
+	waitTagged(t, leader)
+
+	// The next boot reaps it before its first look.
+	ended := make(chan string, 4)
+	fresh := New(hermes, time.Minute, func(profile string) { ended <- profile })
+	reaped, err := fresh.Recover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reaped != 1 {
+		t.Fatalf("Recover reaped %d run(s), want the one that outlived the service", reaped)
+	}
+	if alive(leader) {
+		t.Fatalf("run %d survived Recover: its profile would run twice", leader)
+	}
+	if left, err := fresh.survivors(procRoot); err != nil {
+		t.Fatal(err)
+	} else if len(left) != 0 {
+		t.Fatalf("Recover left %v behind; the profile would run twice", left)
+	}
+	// The reaped run's end was never this service's to signal.
+	select {
+	case extra := <-ended:
+		t.Fatalf("Recover fired an end for %q, a run the new service never held", extra)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// The run the boot look starts for the freed profile is the only one, and
+	// its end still fires exactly once.
+	if err := os.Remove(filepath.Join(dir, "hold")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fresh.Start(context.Background(), "mimi", "wake"); err != nil {
+		t.Fatal(err)
+	}
+	waitEnd(t, ended, "mimi")
+	select {
+	case extra := <-ended:
+		t.Fatalf("onEnd fired an extra time for %q", extra)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A clean stop — SIGTERM, which cancels the boot's context — kills every
+// run's group through exec.CommandContext, so nothing outlives the service.
+// The next boot has nothing to reap, and its own run is the only one.
+func TestACleanStopLeavesNoRunToReap(t *testing.T) {
+	hermes, _, dir := stubHermes(t)
+	if err := os.WriteFile(filepath.Join(dir, "hold"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan string, 4)
+	old := New(hermes, time.Minute, func(profile string) { ended <- profile })
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, _, err := old.Start(ctx, "mimi", "wake"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	waitEnd(t, ended, "mimi") // the run's end still fires exactly once
+	if old.Running("mimi") {
+		t.Fatal("profile reads as running after the clean stop")
+	}
+
+	fresh := New(hermes, time.Minute, func(string) {})
+	reaped, err := fresh.Recover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reaped != 0 {
+		t.Fatalf("Recover found %d run(s) after a clean stop, want none", reaped)
+	}
+}
+
 func TestCancelledContextStartsNothing(t *testing.T) {
 	hermes, argsLog, _ := stubHermes(t)
 	ended := make(chan string, 4)

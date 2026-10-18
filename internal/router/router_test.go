@@ -1,6 +1,7 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -164,23 +165,18 @@ func (s *stubRunner) Running(profile string) bool {
 	return s.running[profile]
 }
 
+// stubLog is the audit log the pass appends to, with the reasons it wrote to
+// stderr kept for the test to read.
 type stubLog struct {
-	mu     sync.Mutex
-	lines  []audit.Line
-	misses []audit.Miss
+	mu      sync.Mutex
+	lines   []audit.Line
+	reasons bytes.Buffer
 }
 
 func (s *stubLog) Append(line audit.Line) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lines = append(s.lines, line)
-	return nil
-}
-
-func (s *stubLog) Dead(miss audit.Miss) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.misses = append(s.misses, miss)
 	return nil
 }
 
@@ -200,6 +196,7 @@ func boot(t *testing.T, cards []board.Card) (*Router, *stubBoard, *stubRunner, *
 		t.Fatalf("boot: %v", err)
 	}
 	router.now = func() time.Time { return lookedAt }
+	router.stderr = &stub.reasons
 	return router, boardy, runner, stub, track
 }
 
@@ -290,8 +287,8 @@ func TestABacklogCardWakesItsRefinerOncePerLook(t *testing.T) {
 	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
 		t.Errorf("the log read as %+v, want %+v", got, []audit.Line{wantLine})
 	}
-	if len(stub.misses) != 0 {
-		t.Errorf("the look dead-lettered %+v", stub.misses)
+	if got := stub.reasons.String(); got != "" {
+		t.Errorf("the look refused %q, want no refusal", got)
 	}
 }
 
@@ -524,19 +521,20 @@ func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
 	if got := track.count("assign " + at(repo, 72)); got != 1 {
 		t.Errorf("the write happened %d times, want once", got)
 	}
-	want := audit.Miss{
-		Reason: "start the run for meme on card " + at(repo, 72) + ": the child would not start",
-		Line: audit.Line{
-			Trigger:    "delivery",
-			Deliveries: []string{"d-72"},
-			Decision:   "refused",
-			Card:       72,
-			Assignee:   "thani-sh-meme",
-			Answer:     http.StatusBadGateway,
-		},
+	want := audit.Line{
+		Trigger:    "delivery",
+		Deliveries: []string{"d-72"},
+		Decision:   "refused",
+		Card:       72,
+		Assignee:   "thani-sh-meme",
+		Answer:     http.StatusBadGateway,
 	}
-	if got := stub.misses; len(got) != 1 || !reflect.DeepEqual(got[0], want) {
-		t.Errorf("the miss read as %+v, want %+v", got, []audit.Miss{want})
+	if got := stub.lines; len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Errorf("the audit read as %+v, want the refused line %+v", got, want)
+	}
+	wantReason := "dispatcher: refused delivery: start the run for meme on card " + at(repo, 72) + " held by thani-sh-meme: the child would not start\n"
+	if got := stub.reasons.String(); got != wantReason {
+		t.Errorf("the reason on stderr was %q, want %q", got, wantReason)
 	}
 
 	code = router.OnDelivery(context.Background(), delivery("d-73"))
@@ -549,8 +547,8 @@ func TestADroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
 	if len(runner.started) != 1 || runner.started[0].reason != reasonRefined(id(72), lookedAt) {
 		t.Errorf("the look started %+v, want the run that repairs the card", runner.started)
 	}
-	if len(stub.misses) != 1 {
-		t.Errorf("the second look dead-lettered %+v, want the first look's only", stub.misses)
+	if got := strings.Count(stub.reasons.String(), "\n"); got != 1 {
+		t.Errorf("the stderr holds %d refusals, want the first look's only", got)
 	}
 }
 
@@ -562,11 +560,14 @@ func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
 	if code != http.StatusBadGateway {
 		t.Fatalf("the failed write answered %d, want 502", code)
 	}
-	if got := len(stub.misses); got != 1 {
-		t.Fatalf("the look wrote %d misses, want one", got)
+	if got := len(stub.lines); got != 1 {
+		t.Fatalf("the look appended %d lines, want one", got)
 	}
-	if got := stub.misses[0]; !strings.HasPrefix(got.Reason, "assign card "+at(repo, 72)+":") {
-		t.Errorf("the miss said %q, want the failed assign named", got.Reason)
+	if got := stub.lines[0]; got.Decision != "refused" || got.Card != 72 || got.Assignee != "thani-sh-meme" {
+		t.Errorf("the refused line read as %+v, want the failed claim", got)
+	}
+	if got := stub.reasons.String(); !strings.Contains(got, "assign card "+at(repo, 72)+" to thani-sh-meme:") {
+		t.Errorf("the reason %q does not name the failed assign", got)
 	}
 	code = router.OnDelivery(context.Background(), delivery("d-73"))
 	if code != http.StatusAccepted {
@@ -576,11 +577,11 @@ func TestAFailedWriteIsRetriedThenRefused(t *testing.T) {
 
 // TestARefusedClaimHandsTheSlotToTheNextCard pins what a permanent refusal and
 // one wake per agent per look have to keep together: the card whose claim the
-// board refused stays unclaimed and is dead-lettered, and the agent's one wake
-// goes to the next card naming it, in that same look — so a card the pass can
-// never claim stops no card behind it. The two cards answer one number in two
-// repositories, and the card behind the refusal is reached in that same look
-// because a card is its identity, not its number.
+// board refused stays unclaimed and leaves a refused line, and the agent's one
+// wake goes to the next card naming it, in that same look — so a card the pass
+// can never claim stops no card behind it. The two cards answer one number in
+// two repositories, and the card behind the refusal is reached in that same
+// look because a card is its identity, not its number.
 func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
 	router, board, runner, stub, track := boot(t, []board.Card{
 		card(9, "Backlog", ""),
@@ -607,11 +608,13 @@ func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
 	if len(runner.started) != 1 || runner.started[0].reason != reasonBacklog(identity{repo: otherRepo, number: 9}, lookedAt) {
 		t.Errorf("the look started %+v, want one run, concerning the card the claim landed on", runner.started)
 	}
-	if len(stub.misses) != 1 {
-		t.Fatalf("the look dead-lettered %+v, want one miss: the refused claim", stub.misses)
-	}
-	if got := stub.misses[0]; got.Line.Card != 9 || !strings.HasPrefix(got.Reason, "assign card "+at(repo, 9)+":") {
-		t.Errorf("the miss read as %+v, want the claim the board refused", got)
+	refused := audit.Line{
+		Trigger:    "delivery",
+		Deliveries: []string{"d-9"},
+		Decision:   "refused",
+		Card:       9,
+		Assignee:   "thani-sh-mama",
+		Answer:     http.StatusBadGateway,
 	}
 	wantLine := audit.Line{
 		Trigger:    "delivery",
@@ -623,8 +626,11 @@ func TestARefusedClaimHandsTheSlotToTheNextCard(t *testing.T) {
 		Session:    "mama-session-1",
 		Answer:     http.StatusBadGateway, // the refusal refuses the look back
 	}
-	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
-		t.Errorf("the log read as %+v, want %+v", got, []audit.Line{wantLine})
+	if got := stub.lines; len(got) != 2 || !reflect.DeepEqual(got[0], refused) || !reflect.DeepEqual(got[1], wantLine) {
+		t.Errorf("the log read as %+v, want the refused line %+v and the wake %+v", got, refused, wantLine)
+	}
+	if got := stub.reasons.String(); !strings.HasPrefix(got, "dispatcher: refused delivery: assign card "+at(repo, 9)+" to thani-sh-mama:") {
+		t.Errorf("the reason %q does not name the claim the board refused", got)
 	}
 }
 
@@ -665,10 +671,10 @@ func TestARefusedClaimSpendsOneWakePerAgentPerLook(t *testing.T) {
 	}
 }
 
-// TestAFailedBoardReadRefusesTheLook pins the refusal on both records: the
-// audit log's line for the look, and the miss beside it. A look whose read
-// failed is past verification, so it is logged (SYSTEMS.md, step 9; ADR
-// 006) as well as dead-lettered.
+// TestAFailedBoardReadRefusesTheLook pins the refusal on the look's record:
+// the audit log's line, with the reason on stderr beside it. A look whose
+// read failed is past verification, so it is logged (SYSTEMS.md, Failure
+// modes; ADR 006).
 func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
 	router, board, _, stub, _ := boot(t, []board.Card{card(72, "Refined", "")})
 	board.failReads = attempts // both tries fail
@@ -689,19 +695,16 @@ func TestAFailedBoardReadRefusesTheLook(t *testing.T) {
 	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
 		t.Errorf("the log read as %+v, want the look's line %+v", got, wantLine)
 	}
-	want := audit.Miss{
-		Reason: "read the board: graphql answered 500",
-		Line:   wantLine,
-	}
-	if got := stub.misses; len(got) != 1 || !reflect.DeepEqual(got[0], want) {
-		t.Errorf("the miss read as %+v, want %+v", got, []audit.Miss{want})
+	wantReason := "dispatcher: refused delivery: read the board: graphql answered 500\n"
+	if got := stub.reasons.String(); got != wantReason {
+		t.Errorf("the reason on stderr was %q, want %q", got, wantReason)
 	}
 }
 
-// TestAFailedBootReadWritesBothRecords is the same refusal with no
+// TestAFailedBootReadLeavesItsLineAndReason is the same refusal with no
 // delivery behind it: the boot look that cannot read the board appends its
-// line, with no answer to carry, and dead-letters the reason beside it.
-func TestAFailedBootReadWritesBothRecords(t *testing.T) {
+// line, with no answer to carry, and writes the reason to stderr beside it.
+func TestAFailedBootReadLeavesItsLineAndReason(t *testing.T) {
 	router, board, _, stub, _ := boot(t, []board.Card{{Number: 72, Column: "Refined"}})
 	board.failReads = attempts // both tries fail
 
@@ -711,9 +714,9 @@ func TestAFailedBootReadWritesBothRecords(t *testing.T) {
 	if got := stub.lines; !reflect.DeepEqual(got, []audit.Line{wantLine}) {
 		t.Errorf("the log read as %+v, want the look's line %+v", got, wantLine)
 	}
-	wantMiss := audit.Miss{Reason: "read the board: graphql answered 500", Line: wantLine}
-	if got := stub.misses; len(got) != 1 || !reflect.DeepEqual(got[0], wantMiss) {
-		t.Errorf("the miss read as %+v, want %+v", got, []audit.Miss{wantMiss})
+	wantReason := "dispatcher: refused boot: read the board: graphql answered 500\n"
+	if got := stub.reasons.String(); got != wantReason {
+		t.Errorf("the reason on stderr was %q, want %q", got, wantReason)
 	}
 }
 
@@ -725,8 +728,8 @@ func TestABadStartRetriesTheRun(t *testing.T) {
 	if code != http.StatusAccepted {
 		t.Fatalf("a retried start answered %d, want 202", code)
 	}
-	if len(runner.started) != 1 || len(stub.misses) != 0 {
-		t.Errorf("the look left %+v started and %d misses, want one start and no misses", runner.started, len(stub.misses))
+	if len(runner.started) != 1 || stub.reasons.Len() != 0 {
+		t.Errorf("the look left %+v started and %q on stderr, want one start and no refusal", runner.started, stub.reasons.String())
 	}
 }
 

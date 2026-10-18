@@ -21,6 +21,7 @@ package router
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -59,11 +60,9 @@ type Runner interface {
 	Running(profile string) bool
 }
 
-// Logger is the service's record of itself: the audit line appended per
-// look, and the miss written when an action the look tried fails.
+// Logger is the service's record of itself: the audit line appended per look.
 type Logger interface {
 	Append(audit.Line) error
-	Dead(audit.Miss) error
 }
 
 // identity is a card below the board read: the repository the board named and
@@ -96,6 +95,7 @@ type Router struct {
 	runner Runner
 	log    Logger
 	login  map[string]string // GitHub login to the Hermes profile the run uses
+	stderr io.Writer
 
 	mu        sync.Mutex
 	attempted map[identity]attempt
@@ -118,6 +118,7 @@ func New(reader Reader, writer Writer, runner Runner, log Logger, login map[stri
 		runner:    runner,
 		log:       log,
 		login:     login,
+		stderr:    os.Stderr,
 		attempted: make(map[identity]attempt),
 		now:       time.Now,
 	}, nil
@@ -185,11 +186,11 @@ func servesRule(login map[string]string) error {
 	return fmt.Errorf("the fleet carries no builder: the rule needs one of %s", strings.Join(builderProfiles, ", "))
 }
 
-// attempts is how many times a look tries a failing action before it
-// dead-letters it (SYSTEMS.md, Failure modes): one immediate retry for a
-// transient answer, and the next look the patient one. The runner's error
-// means nothing started, so a retried start cannot spawn twice; its own
-// one-run-per-agent rule is the backstop.
+// attempts is how many times a look tries a failing action before it refuses
+// it (SYSTEMS.md, Failure modes): one immediate retry for a transient answer,
+// and the next look the patient one. The runner's error means nothing
+// started, so a retried start cannot spawn twice; its own one-run-per-agent
+// rule is the backstop.
 const attempts = 2
 
 // need is what one card asks for: the rule named an agent for it, and kind
@@ -238,10 +239,9 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 			line.Answer = http.StatusBadGateway
 		}
 		// A refused look is still a look, and the line is the audit's
-		// record of it; the same line, with the reason beside it, is the
-		// dead-letter file's (SYSTEMS.md, step 9; ADR 006).
-		r.log.Append(line)
-		r.miss(err, audit.Miss{Reason: err.Error(), Line: line})
+		// record of it; the reason goes to stderr beside it (SYSTEMS.md,
+		// Failure modes; ADR 006).
+		r.refuse(line, err.Error())
 		return http.StatusBadGateway
 	}
 
@@ -281,7 +281,7 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 					// claimed in this same look, and this card's retry is the
 					// next look.
 					delete(decided, call.profile)
-					r.fail(trigger, deliveries, fmt.Errorf("assign card %s: %w", ident(call.card), err), call.card.Number, call.login)
+					r.fail(trigger, deliveries, fmt.Errorf("assign card %s to %s: %w", ident(call.card), call.login, err), call.card.Number, call.login)
 					continue
 				}
 			}
@@ -292,7 +292,7 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 				// so, and the next look restarts the run instead of deciding
 				// the card again — the write is not repeated.
 				r.attempted[ident(call.card)] = attempt{column: call.card.Column, assignee: call.login, ran: false}
-				r.fail(trigger, deliveries, fmt.Errorf("start the run for %s on card %s: %w", call.profile, ident(call.card), err), call.card.Number, call.login)
+				r.fail(trigger, deliveries, fmt.Errorf("start the run for %s on card %s held by %s: %w", call.profile, ident(call.card), call.login, err), call.card.Number, call.login)
 				continue
 			}
 			// The claim is recorded on the state the pass leaves behind: the
@@ -319,8 +319,8 @@ func (r *Router) look(ctx context.Context, trigger string, deliveries []string) 
 		}
 		if err := r.log.Append(woke[i]); err != nil {
 			// The wakes are started; failing the look back cannot unstart
-			// them, and the miss channel is the same disk that could not
-			// take the line. The record is lost here, named by this branch.
+			// them, and no other record holds the line. The record is
+			// lost here, named by this branch.
 			continue
 		}
 	}
@@ -571,23 +571,27 @@ func tryBuild(op func() (string, string, error)) (string, string, error) {
 	return "", "", err
 }
 
-// fail dead-letters one look's miss: the reason, in the service's own
-// words, and the line the look would have appended. The pass never drops
-// a wake it refused; the next look is the retry.
+// fail records one refused action: the line the look would have appended,
+// with the refusal as its decision, goes to the audit log — the look's record
+// does not shrink — and the reason, in the service's own words, goes to
+// stderr. The pass never drops a wake it refused; the next look is the retry.
 func (r *Router) fail(trigger string, deliveries []string, err error, card int, assignee string) {
 	line := audit.Line{Trigger: trigger, Deliveries: deliveries, Decision: "refused", Card: card, Assignee: assignee}
 	if trigger == "delivery" {
 		line.Answer = http.StatusBadGateway
 	}
-	r.miss(err, audit.Miss{Reason: err.Error(), Line: line})
+	r.refuse(line, err.Error())
 }
 
-// miss writes one miss to the dead-letter file. A write that fails is
-// dropped and named on stderr, not retried forever: the record cannot
-// serve the look back to itself, and the next look re-attempts the action
-// the miss was about.
-func (r *Router) miss(err error, miss audit.Miss) {
-	if writeErr := r.log.Dead(miss); writeErr != nil {
-		fmt.Fprintln(os.Stderr, "dispatcher: dead-letter not written:", writeErr)
+// refuse records one refused action: its line is appended to the audit log,
+// and its reason, in the service's own words, is written to stderr — one line
+// per refused action, carrying the identity it concerns. Nothing reads the
+// reason back: the line is the record and the journal is where a person reads
+// it (SYSTEMS.md, Failure modes). A write that fails is named on stderr, not
+// retried: the next look re-attempts the action the line was about.
+func (r *Router) refuse(line audit.Line, reason string) {
+	if writeErr := r.log.Append(line); writeErr != nil {
+		fmt.Fprintln(r.stderr, "dispatcher: audit not written:", writeErr)
 	}
+	fmt.Fprintf(r.stderr, "dispatcher: refused %s: %s\n", line.Trigger, reason)
 }

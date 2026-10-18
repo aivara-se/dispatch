@@ -81,31 +81,22 @@ func TestZeroFieldsAreWrittenAsAbsent(t *testing.T) {
 	}
 }
 
-func TestDeadWritesToTheDeadLetterFileNotTheAuditFile(t *testing.T) {
+// TestOpenLeavesNothingBesideTheAuditFile pins the file the service writes:
+// the audit log alone, with no second file for what failed.
+func TestOpenLeavesNothingBesideTheAuditFile(t *testing.T) {
 	log, path := open(t, 1<<20)
-	dir := filepath.Dir(path)
-	miss := Miss{Reason: "board read failed", Line: Line{Trigger: "boot", Card: 69}}
-	if err := log.Dead(miss); err != nil {
-		t.Fatalf("dead: %v", err)
+	if err := log.Append(Line{Trigger: "boot"}); err != nil {
+		t.Fatalf("append: %v", err)
 	}
 	if err := log.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	deadLetter := filepath.Join(dir, "audit.dead.jsonl")
-	auditLines := lines(t, path)
-	if len(auditLines) != 0 {
-		t.Errorf("audit file holds %q, want nothing", auditLines)
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
 	}
-	deadLines := lines(t, deadLetter)
-	if len(deadLines) != 1 {
-		t.Fatalf("dead-letter file holds %d lines, want 1", len(deadLines))
-	}
-	var have Miss
-	if err := json.Unmarshal([]byte(deadLines[0]), &have); err != nil {
-		t.Fatalf("the miss does not decode: %v", err)
-	}
-	if !reflect.DeepEqual(have, miss) {
-		t.Errorf("the miss gave %+v, want %+v", have, miss)
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+		t.Errorf("the audit directory holds %v, want the audit file alone", entries)
 	}
 }
 
@@ -158,25 +149,6 @@ func TestRotationKeepsOneGeneration(t *testing.T) {
 	}
 }
 
-func TestTheDeadLetterFileRotatesToo(t *testing.T) {
-	log, path := open(t, 100)
-	for i := 0; i < 3; i++ {
-		if err := log.Dead(Miss{Reason: "reason", Line: Line{Trigger: "boot"}}); err != nil {
-			t.Fatalf("dead: %v", err)
-		}
-	}
-	if err := log.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	dir := filepath.Dir(path)
-	if got := lines(t, filepath.Join(dir, "audit.dead.1.jsonl")); len(got) != 2 {
-		t.Errorf("rotated dead-letter file holds %q, want two lines", got)
-	}
-	if got := lines(t, filepath.Join(dir, "audit.dead.jsonl")); len(got) != 1 {
-		t.Errorf("dead-letter file holds %q, want one line", got)
-	}
-}
-
 func TestALineLargerThanMaxBytesIsStillWritten(t *testing.T) {
 	log, path := open(t, 8)
 	if err := log.Append(Line{Trigger: "boot", Decision: "woken meme for card 69"}); err != nil {
@@ -205,9 +177,6 @@ func TestWritingAfterCloseIsAnError(t *testing.T) {
 	}
 	if err := log.Append(Line{Trigger: "boot"}); err == nil {
 		t.Error("append after close succeeded")
-	}
-	if err := log.Dead(Miss{Reason: "reason"}); err == nil {
-		t.Error("dead after close succeeded")
 	}
 	if got := lines(t, path); len(got) != 0 {
 		t.Errorf("audit file holds %q, want nothing", got)

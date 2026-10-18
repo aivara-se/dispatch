@@ -191,9 +191,9 @@ func (h *Handler) remember(id string, now time.Time) bool {
 	return true
 }
 
-// forget drops the delivery id, so a delivery the look failed —
-// dead-lettered, never silently lost — is acted on when it is sent again
-// rather than swallowed as a duplicate.
+// forget drops the delivery id, so a delivery the look failed — refused,
+// never silently lost — is acted on when it is sent again rather than
+// swallowed as a duplicate.
 func (h *Handler) forget(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -44,8 +44,7 @@ const (
 var backlogReason = fmt.Sprintf("card %s#%d sits in Backlog with nobody holding it; refine it", repo, unsettledCard)
 
 // auditPath puts the audit file where the test's own scratch directory holds
-// it, never in the working tree. The dead-letter file sits beside it, the
-// way audit.Open places it.
+// it, never in the working tree.
 func auditPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "audit.jsonl")
@@ -453,6 +452,36 @@ func auditHas(t *testing.T, path, trigger string) (audit.Line, bool) {
 	return audit.Line{}, false
 }
 
+// refusedLines returns the audit's lines whose decision is the refusal: the
+// record one refused action leaves.
+func refusedLines(t *testing.T, path string) []audit.Line {
+	t.Helper()
+	var out []audit.Line
+	for _, line := range auditLines(t, path) {
+		if line.Decision == "refused" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// beside returns the names of the files next to path in its directory, other
+// than path itself: a boot leaves the audit file and nothing beside it.
+func beside(t *testing.T, path string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, entry := range entries {
+		if entry.Name() != filepath.Base(path) {
+			out = append(out, entry.Name())
+		}
+	}
+	return out
+}
+
 // wokenThroughBoot waits out the whole boot look: the claim on the board,
 // the run started and ended, the run-end look served — and returns the
 // invocations the stub agent recorded.
@@ -532,12 +561,11 @@ func TestRunBootsWithTheFixtureConfig(t *testing.T) {
 	}
 }
 
-// TestTheBootLookThatCannotReadTheBoardLeavesBothRecords boots against a
-// stub GitHub whose project read answers 500. The look is refused, and the
-// refusal is on both records: the audit log's line for the look, and the
-// dead-letter file's miss with the reason beside it. No claim is written
-// and no run starts.
-func TestTheBootLookThatCannotReadTheBoardLeavesBothRecords(t *testing.T) {
+// TestTheBootLookThatCannotReadTheBoardLeavesItsLine boots against a stub
+// GitHub whose project read answers 500. The look is refused: the audit log
+// holds the line for the look, the reason goes to stderr, and nothing is
+// written beside the audit file. No claim is written and no run starts.
+func TestTheBootLookThatCannotReadTheBoardLeavesItsLine(t *testing.T) {
 	stub := newStubGitHub()
 	stub.put(unsettledCard, stubCard{column: "Backlog", repo: repo})
 	stub.failReads = true
@@ -562,14 +590,8 @@ func TestTheBootLookThatCannotReadTheBoardLeavesBothRecords(t *testing.T) {
 	if len(lines) != 1 || lines[0].Trigger != "boot" || lines[0].Answer != 0 {
 		t.Errorf("the audit reads %+v, want the boot look's one line with no answer", lines)
 	}
-	deadFile := filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl")
-	var miss audit.Miss
-	until(t, "the miss on the dead-letter file", func() bool {
-		raw, err := os.ReadFile(deadFile)
-		return err == nil && json.Unmarshal(raw, &miss) == nil
-	})
-	if !strings.Contains(miss.Reason, "read the board") {
-		t.Errorf("the miss %q does not name the failed read", miss.Reason)
+	if got := beside(t, auditFile); len(got) != 0 {
+		t.Errorf("the boot left %v beside the audit file, want nothing", got)
 	}
 	// The refused look wrote no claim and started no run.
 	if got := stub.assigns(); len(got) != 0 {
@@ -828,8 +850,8 @@ func TestConcurrentDeliveriesDecideSerially(t *testing.T) {
 }
 
 // TestTheDroppedWakeIsRepairedAtTheNextLook boots with a Hermes path that
-// holds nothing: the boot look claims the card, fails the start, and
-// dead-letters the miss. Writing the agent script is the fix. The next
+// holds nothing: the boot look claims the card, fails the start, and leaves a
+// refused line in the audit log. Writing the agent script is the fix. The next
 // look — a delivery's — repairs the wake: the same claim is not written
 // twice, and the run the assignment promised starts.
 func TestTheDroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
@@ -849,21 +871,16 @@ func TestTheDroppedWakeIsRepairedAtTheNextLook(t *testing.T) {
 	until(t, "the claim the run could not start", func() bool {
 		return len(stub.assigns()) == 1 && strings.Contains(stub.assigns()[0], theURL())
 	})
-	deadFile := filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl")
-	until(t, "the miss on the dead-letter file", func() bool {
-		_, err := os.Stat(deadFile)
-		return err == nil
+	until(t, "the refused boot line", func() bool {
+		for _, line := range refusedLines(t, auditFile) {
+			if line.Trigger == "boot" && line.Card == unsettledCard {
+				return true
+			}
+		}
+		return false
 	})
-	raw, err := os.ReadFile(deadFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var miss audit.Miss
-	if err := json.Unmarshal(raw, &miss); err != nil {
-		t.Fatalf("the dead letter is not a miss: %v", err)
-	}
-	if !strings.Contains(miss.Reason, "start the run for mama") {
-		t.Errorf("the miss %q does not name the failed run", miss.Reason)
+	if got := beside(t, auditFile); len(got) != 0 {
+		t.Errorf("the boot left %v beside the audit file, want nothing", got)
 	}
 
 	stubHermes(t, hermes, argsLog)
@@ -987,12 +1004,8 @@ func TestTwoCardsOfOneNumberAreEachClaimedAtTheirOwnRepository(t *testing.T) {
 	}
 	// The number two cards answer refused nothing: the write is identified by
 	// the repository and the number.
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl"))
-	if err != nil {
-		t.Fatalf("the dead-letter file: %v", err)
-	}
-	if strings.TrimSpace(string(raw)) != "" {
-		t.Errorf("the look dead-lettered %s, want no refusal for a number two cards answer", raw)
+	if got := refusedLines(t, auditFile); len(got) != 0 {
+		t.Errorf("the look refused %+v, want no refusal for a number two cards answer", got)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -1032,12 +1045,8 @@ func TestAFinishedCardOfAnotherRepositoryRefusesNothing(t *testing.T) {
 	if got := invocations(t, argsLog); !strings.Contains(got[0], "--profile mama chat -q") {
 		t.Errorf("the run is %q, want MaMa on the Backlog card", got)
 	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(auditFile), "audit.dead.jsonl"))
-	if err != nil {
-		t.Fatalf("the dead-letter file: %v", err)
-	}
-	if strings.TrimSpace(string(raw)) != "" {
-		t.Errorf("the look dead-lettered %s, want the Finished sibling to refuse nothing", raw)
+	if got := refusedLines(t, auditFile); len(got) != 0 {
+		t.Errorf("the look refused %+v, want the Finished sibling to refuse nothing", got)
 	}
 	cancel()
 	if err := <-done; err != nil {

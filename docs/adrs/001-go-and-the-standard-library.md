@@ -2,7 +2,7 @@
 
 ## Context
 
-This service is a long-running network process: it listens for GitHub's deliveries and wakes the agents the board's state calls for. That is a different kind of program from a script that runs, prints and exits. Go is the language it is written in; what needs recording is why, and what the choice rules out.
+This service is a long-running network process: it listens for GitHub's deliveries and wakes the agent a delivery concerns. That is a different kind of program from a script that runs, prints and exits. Go is the language it is written in; what needs recording is why, and what the choice rules out.
 
 ## Decision
 

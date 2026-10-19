@@ -4,7 +4,7 @@ Dispatch is a Go service that receives GitHub's webhook deliveries for the `aiva
 
 ## Current Project Focus
 
-The design is complete: `docs/PRODUCT.md`, `docs/SYSTEMS.md` and the decisions in `docs/adrs/` are settled. The build is next — the module, the committed configuration and the packages `SYSTEMS.md` describes. v1 carries one flow, pull request reviews, and touches no board.
+The design is settled and v1 is built: the module and the packages `SYSTEMS.md` describes, with the configuration documented in `README.md`. What remains is the host rollout — the unit, the webhook and the two hand checks `SYSTEMS.md` names. v1 carries one flow, pull request reviews, and touches no board.
 
 This section is steering, not policy. It is the one place where what matters right now outranks the standing rules below, it changes often, and it is replaced rather than appended to. Keep it short enough to read in full, and current enough to be worth reading.
 
@@ -47,6 +47,11 @@ These three are the gate, and CI runs them on every pull request and on `main`. 
 
 ## Repository Structure
 
+- `cmd/dispatch/`: the wire-up — the one flag, the server and its timeouts, and the clean shutdown
+- `internal/config/`: loads and validates the configuration file, and resolves the secret it names
+- `internal/receiver/`: verifies a delivery, decides, and answers; the delivery-id cache lives here
+- `internal/run/`: starts `hermes --profile <profile> chat -q "<reason>"` and reaps it
+- `internal/audit/`: the JSON Lines record, appended and size-rotated
 - `docs/PRODUCT.md`: what the service is for, who it is for, and how it is judged
 - `docs/SYSTEMS.md`: the architecture — where it runs, how a delivery becomes a run, and what is checked
 - `docs/adrs/`: one decision per file; merged into `main` means Accepted

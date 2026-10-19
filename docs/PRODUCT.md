@@ -1,10 +1,14 @@
-# dispatcher: product
+# Dispatch: product
 
-GitHub posts to `dispatcher` when something happens in the `aivara-se` organisation. It verifies the delivery and, for the one flow it carries, wakes the agent the event concerns. The operator of a small fleet — one person, a few bots — installs it, trusts it, and reads its log when a wake is missed. The service does not do the work.
+GitHub posts to `dispatch` when something happens in the `aivara-se` organisation. It verifies the delivery and, for the one flow it carries, wakes the agent the event concerns. The operator of a small fleet — one person, a few bots — installs it, trusts it, and reads its log when a wake is missed. The service does not do the work.
 
 v1 carries a single flow: pull request reviews.
 
 A wake is a **reason, not an instruction**: the service says *why now*, and the agent re-reads the pull request and decides what to do. A wake may therefore be early, late, duplicated or out of order and the outcome is the same.
+
+## Configuration
+
+The operator lists the agents the service knows, each with its GitHub login and the local profile that login runs as. A login that is not on the list — a human reviewer, say — wakes nobody. The service is configured from one file and acts on every repository under `aivara-se`.
 
 ## The flow: pull request reviews
 

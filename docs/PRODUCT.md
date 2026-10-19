@@ -22,7 +22,7 @@ Every agent reviews. A review is not a card and never takes a developer's slot, 
 ## What it never does
 
 - Never starts an agent the state does not call for, and never the operator. No agent is woken for the event it made.
-- Never starts a second run for one agent.
+- Never holds a wake back or queues one: a review request starts a run even if the agent is already running one.
 - Never logs a payload body or a secret value.
 - Never carries text a third party wrote into a run: the reason is identifiers and the service's own words.
 - Never orders events, and never depends on their order.

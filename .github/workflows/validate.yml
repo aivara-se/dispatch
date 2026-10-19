@@ -1,0 +1,32 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+
+      # The service is design-first: there is no package to vet or test yet.
+      # The gate runs as soon as the first one lands.
+      - name: Vet and test
+        run: |
+          if [ -z "$(find . -name '*.go' -not -path './.git/*' -print -quit)" ]; then
+            echo "No Go packages yet; nothing to vet or test."
+            exit 0
+          fi
+          go vet ./...
+          go test ./...

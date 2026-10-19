@@ -2,7 +2,7 @@
 
 ## Context
 
-We need to record architectural decisions made during the development of dispatcher.
+We need to record architectural decisions made during the development of Dispatch.
 
 ## Decision
 

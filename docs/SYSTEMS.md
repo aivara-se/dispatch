@@ -11,7 +11,7 @@ The unit, the environment file and the proxy site are `README.md` (*Run it on th
 1. GitHub posts to the public URL; the proxy forwards to the loopback address and path the configuration names ([`004`](adrs/004-configuration.md)).
 2. The receiver reads the raw body up to 1 MiB, then verifies `X-Hub-Signature-256` against the configured secret. Nothing is parsed before it verifies ([`002`](adrs/002-github-webhook-ingestion.md)).
 3. It takes the event and the delivery id from the headers, and the action, the repository and the requested reviewer from the body.
-4. Only a `pull_request` delivery whose action is `review_requested` acts. Every other event, action and repository is accepted and ignored.
+4. Only a `pull_request` delivery whose action is `review_requested` acts. Every other event or action is accepted and ignored.
 5. The delivery id is checked against the in-memory cache. A delivery already seen is accepted and starts nothing.
 6. The requested reviewer's login is matched against the configured agents. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken.
 7. The matched profile's agent is started, with the reason ([`003`](adrs/003-starting-a-run.md)).
@@ -56,7 +56,7 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 - **A wrong or missing signature** — `401`; nothing is parsed and nothing is logged.
 - **A body that is not JSON, or past the 1 MiB bound** — refused before anything is decided, answered `400`.
-- **A delivery that is not ours** — another event, action or repository: `202`, and nobody is woken.
+- **A delivery that is not ours** — another event or action: `202`, and nobody is woken.
 - **A repeat** — `202`, and nobody is woken; the line shows it was seen.
 - **A run that cannot start** — recorded on the delivery's line, answered `202`, not retried.
 - **A crash or a restart** — out of scope for v1: the cache and any run in flight are not reconciled, and a delivery redelivered inside the lost hour can start one extra run.

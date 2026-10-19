@@ -4,7 +4,7 @@ Dispatch is a Go service that receives GitHub's webhook deliveries for the `aiva
 
 ## Current Project Focus
 
-The design is being written before the code: `docs/PRODUCT.md` and the decisions in `docs/adrs/` are settled, and `docs/SYSTEMS.md` is next. v1 carries one flow, pull request reviews, and touches no board.
+The design is complete: `docs/PRODUCT.md`, `docs/SYSTEMS.md` and the decisions in `docs/adrs/` are settled. The build is next — the module, the committed configuration and the packages `SYSTEMS.md` describes. v1 carries one flow, pull request reviews, and touches no board.
 
 This section is steering, not policy. It is the one place where what matters right now outranks the standing rules below, it changes often, and it is replaced rather than appended to. Keep it short enough to read in full, and current enough to be worth reading.
 
@@ -48,6 +48,7 @@ These three are the gate, and CI runs them on every pull request and on `main`. 
 ## Repository Structure
 
 - `docs/PRODUCT.md`: what the service is for, who it is for, and how it is judged
+- `docs/SYSTEMS.md`: the architecture — where it runs, how a delivery becomes a run, and what is checked
 - `docs/adrs/`: one decision per file; merged into `main` means Accepted
 - `AGENTS.md`: the entry file an agent reads first
 - `README.md`: how it builds, runs and deploys, and where the documents are

@@ -853,6 +853,38 @@ func TestUnarmedApprovalIgnoresTheReviewCap(t *testing.T) {
 	}
 }
 
+// TestApprovalsAddNoRounds pins the other side of that: an approval advances
+// neither counter, so ten unarmed approvals on a pull request leave its round
+// count at zero and the changes-requested review that follows still wakes.
+func TestApprovalsAddNoRounds(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := approvalBody("open", false, "null", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("approval%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("approval %d: status = %d, want 202", i, w.Code)
+		}
+		if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
+			t.Fatalf("approval %d: decision = %q, want started", i, got)
+		}
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds)
+	}
+
+	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+	if w := post(rc, "pull_request_review", "round1", round, sign(round)); w.Code != http.StatusAccepted {
+		t.Fatalf("changes requested: status = %d, want 202", w.Code)
+	}
+	if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
+		t.Fatalf("changes requested after %d approvals: decision = %q, want started", MaxRounds, got)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d: an approval spent a round", len(runner.calls), MaxRounds+1)
+	}
+}
+
 func TestApprovalWakesNobody(t *testing.T) {
 	cases := []struct {
 		name      string

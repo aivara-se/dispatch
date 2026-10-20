@@ -103,6 +103,16 @@ func reviewBody(action, sender, reviewer string) string {
 	}`, action, reviewer, sender)
 }
 
+func changesBody(state, sender, author string) string {
+	return fmt.Sprintf(`{
+		"action": "submitted",
+		"repository": {"full_name": "aivara-se/dispatch"},
+		"pull_request": {"number": 105, "user": {"login": %q}},
+		"review": {"state": %q},
+		"sender": {"login": %q}
+	}`, author, state, sender)
+}
+
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
 	// The body is not JSON: a 400 here would mean it had been parsed.
 	const body = `{"action":`
@@ -251,6 +261,43 @@ func TestActorIsNeverWoken(t *testing.T) {
 	}
 	if recorder.records[0].Decision != audit.Ignored {
 		t.Fatalf("decision = %q, want ignored", recorder.records[0].Decision)
+	}
+}
+
+func TestChangesRequestedWakesAuthor(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := changesBody("changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	if recorder.records[0].Decision != audit.Started {
+		t.Fatalf("decision = %q, want started", recorder.records[0].Decision)
+	}
+}
+
+func TestReviewWithoutChangesWakesNobody(t *testing.T) {
+	for _, state := range []string{"approved", "commented"} {
+		t.Run(state, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+			body := changesBody(state, "thani-sh-meme", "thani-sh-mama")
+
+			if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			if recorder.records[0].Decision != audit.Ignored {
+				t.Fatalf("decision = %q, want ignored", recorder.records[0].Decision)
+			}
+		})
 	}
 }
 

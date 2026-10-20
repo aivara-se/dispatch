@@ -15,6 +15,6 @@ The failure modes are not one fact: a write that failed is a delivery that woke 
 
 ## Consequences
 
-- The record answers both halves of the acceptance: whether an agent was started, and whether the label was written. 005's "answers the acceptance exactly" still reads true; the acceptance grew by one question, and so did the line.
+- The record answers both halves of the acceptance. 005's enumeration — whether an agent was started, and when not, why — is the first half; the label write is the second. 005's sentence answered the half the acceptance then had, and this line answers the whole of it now.
 - The label's name is the service's own word, so logging it stays inside 005's rule that the line carries no third party's text.
 - A failed write is visible without reading the pull request, which is the point: the operator learns from the log that a pull request is not marked blocked when the service meant it to be.

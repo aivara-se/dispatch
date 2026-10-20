@@ -23,7 +23,7 @@ The answers are the service's own: `401` a missing or non-verifying signature, `
 
 ## Starting a run
 
-The requirement is that a review request is neither queued nor held back: nothing waits on a run already in flight. The one thing between a delivery and its run is the bounded label read ([`006`](adrs/006-the-review-loop-and-its-cap.md)). The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>"`, launched by the service and not tracked ([`003`](adrs/003-starting-a-run.md)).
+The requirement is that a review request is neither queued nor held back: nothing waits on a run already in flight. Below the cap, the one thing between a delivery and its run is the bounded label read ([`006`](adrs/006-the-review-loop-and-its-cap.md)); at the cap there is no run at all. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>"`, launched by the service and not tracked ([`003`](adrs/003-starting-a-run.md)).
 
 - **No serialisation.** Every wake starts a run; nothing queues and nothing is held back, so an agent may have several runs at once.
 - **No tracking.** The child is reaped so it does not linger; no run table, no exit bookkeeping, no lifetime bound, nothing reconciled at boot.

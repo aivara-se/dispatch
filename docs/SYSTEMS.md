@@ -78,7 +78,7 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 - **A wrong or missing signature** — `401`; nothing is parsed and nothing is logged.
 - **A body that is not JSON, or past the 1 MiB bound** — refused, answered `400`.
 - **A delivery that is not ours** — another event, action, review state or author association: `202`, and nobody is woken.
-- **A delivery with nobody to wake** — a team in place of a login, an approval on a draft or an armed pull request, a comment whose author is not the owner, a member or a collaborator, an unconfigured login: `202`, and the line says which.
+- **A delivery with nobody to wake** — a team in place of a login, a comment whose author is not the owner, a member or a collaborator, an unconfigured login: `202`, and the line names which of them it was. An approval on a draft or an armed pull request is refused the same way, but its line names no condition: it is logged as an event and an action that do not act.
 - **A repeat** — `202`, and nobody is woken; the line shows it was seen.
 - **A pull request at either cap** — `202`, and nobody is woken; the line shows which cap was reached.
 - **A run that cannot start** — recorded on the line, answered `202`, not retried.

@@ -336,14 +336,14 @@ func TestChangesRequestedWakesAuthor(t *testing.T) {
 func TestIssueAssignmentWakesAssignee(t *testing.T) {
 	runner := &stubRunner{}
 	rc, recorder := newReceiver(runner)
-	// The assignees array names a second configured agent; only the assignee
-	// object is the wake set.
+	// The assignees array names a second configured agent ahead of the
+	// assignee; only the assignee object is the wake set.
 	body := `{
 		"action": "assigned",
 		"repository": {"full_name": "aivara-se/dispatch"},
 		"issue": {"number": 124},
 		"assignee": {"login": "thani-sh-meme"},
-		"assignees": [{"login": "thani-sh-meme"}, {"login": "thani-sh-mama"}],
+		"assignees": [{"login": "thani-sh-mama"}, {"login": "thani-sh-meme"}],
 		"sender": {"login": "thani-sh"}
 	}`
 
@@ -396,9 +396,10 @@ func TestIssueDeliveryWakesNobody(t *testing.T) {
 	}
 }
 
-// TestIssueAssignmentAddsNoRound pins that the cap counts pull requests: an
-// issue whose number matches a capped pull request still wakes its assignee.
-func TestIssueAssignmentAddsNoRound(t *testing.T) {
+// TestIssueAssignmentIsNotCapped pins that the cap is read for pull requests
+// only: an issue whose number matches a capped pull request still wakes its
+// assignee.
+func TestIssueAssignmentIsNotCapped(t *testing.T) {
 	runner := &stubRunner{}
 	rc, _ := newReceiver(runner)
 	round := changesBodyOn(124, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
@@ -418,6 +419,36 @@ func TestIssueAssignmentAddsNoRound(t *testing.T) {
 	}
 	if got := runner.calls[len(runner.calls)-1].profile; got != "meme" {
 		t.Fatalf("assignment profile = %q, want meme", got)
+	}
+}
+
+// TestIssueAssignmentAddsNoRound pins ADR 008's "the assignment adds no
+// count": ten assignments on one issue leave its pull request short of the
+// cap, so a changes-requested review on that number still wakes the author.
+func TestIssueAssignmentAddsNoRound(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+
+	body := issueBodyOn(124, "assigned", "thani-sh", "thani-sh-meme")
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "issues", fmt.Sprintf("a%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("assignment %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds)
+	}
+
+	round := changesBodyOn(124, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+	if w := post(rc, "pull_request_review", "after-assignments", round, sign(round)); w.Code != http.StatusAccepted {
+		t.Fatalf("review after the assignments: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#124"}
+	if got := runner.calls[len(runner.calls)-1]; got != want {
+		t.Fatalf("review after the assignments = %+v, want %+v", got, want)
 	}
 }
 

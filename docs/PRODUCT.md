@@ -14,7 +14,7 @@ The operator lists the agents the service knows, each with its GitHub login and 
 
 When a pull request asks an agent to review it, the service wakes that agent. A pull request asks when an agent is added as a reviewer, or an agent's review is requested again.
 
-When a review requests changes, the service wakes the pull request's author. The author updates the branch and asks for the review again, which wakes the reviewer. That is the loop. A review that approves or only comments wakes nobody.
+When a review requests changes, the service wakes the pull request's author. The author updates the branch and asks for the review again, which wakes the reviewer. That is the loop. An approval lands the change and wakes nobody; an approval that lands nothing — on a pull request that is open, not a draft and not armed — wakes its author ([`012`](adrs/012-an-approval-that-lands-nothing-wakes-the-author.md)). A review that only comments wakes nobody.
 
 The loop is capped at ten rounds. A round is a review that requests changes. When a pull request reaches ten, a further review request or changes-requested review on it wakes nobody, so a disagreement cannot run forever. The count belongs to the pull request and lives in memory.
 
@@ -103,11 +103,11 @@ v1.5 is done when each of these holds, and each is checkable by the operator.
 - **v1.3** — assigning an issue wakes the agent it was assigned to.
 - **v1.4** — assigning a pull request wakes the agent it was assigned to, on the same rules as an issue's assignment.
 - **v1.5** — a failing check wakes the account that pushed the pull request, at most five times per pull request — the one wake aimed at the delivery's own actor.
+- **v1.7** — an approval on a pull request that is not armed wakes its author, because the approval is the merge and an unarmed change lands nothing ([`012`](adrs/012-an-approval-that-lands-nothing-wakes-the-author.md)).
 
 ## Roadmap
 
 Decided and not yet built. Each version widens the set of deliveries the service acts on; a line moves into the changelog when its code lands.
 
 - **v1.6** — an exact `@login` in a comment from a member wakes that agent, on an issue or a pull request ([`011`](adrs/011-a-mention-wakes-the-agent-it-names.md)).
-- **v1.7** — an approval on a pull request that is not armed wakes its author, because the approval is the merge and an unarmed change lands nothing ([`012`](adrs/012-an-approval-that-lands-nothing-wakes-the-author.md)).
 - **v1.8** — a draft marked ready wakes the reviewers it requests, because that is the moment a probe becomes a candidate ([`013`](adrs/013-a-draft-marked-ready-wakes-its-reviewers.md)).

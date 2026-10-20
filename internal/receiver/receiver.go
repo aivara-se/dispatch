@@ -61,10 +61,16 @@ type payload struct {
 	} `json:"repository"`
 	PullRequest struct {
 		Number int `json:"number"`
+		User   struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"pull_request"`
 	RequestedReviewer *struct {
 		Login string `json:"login"`
 	} `json:"requested_reviewer"`
+	Review struct {
+		State string `json:"state"`
+	} `json:"review"`
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
@@ -124,7 +130,9 @@ func (rc *Receiver) verify(body []byte, header string) bool {
 }
 
 func (rc *Receiver) decide(rec *audit.Record, p *payload) {
-	if rec.Event != "pull_request" || p.Action != "review_requested" {
+	review := rec.Event == "pull_request" && p.Action == "review_requested"
+	changes := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "changes_requested"
+	if !review && !changes {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("event %q with action %q is not a review request", rec.Event, p.Action)
 		return
@@ -136,25 +144,29 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rc.seen.add(rec.Delivery)
 
-	if p.RequestedReviewer == nil || p.RequestedReviewer.Login == "" {
-		rec.Decision = audit.Ignored
-		rec.Why = "review was requested from a team, not a login"
-		return
+	login := p.PullRequest.User.Login
+	reason := fmt.Sprintf("Dispatch: changes requested on %s#%d", rec.Repository, rec.Number)
+	if review {
+		if p.RequestedReviewer == nil || p.RequestedReviewer.Login == "" {
+			rec.Decision = audit.Ignored
+			rec.Why = "review was requested from a team, not a login"
+			return
+		}
+		login = p.RequestedReviewer.Login
+		reason = fmt.Sprintf("Dispatch: review requested on %s#%d", rec.Repository, rec.Number)
 	}
-	login := p.RequestedReviewer.Login
 	if p.Sender.Login == login {
 		rec.Decision = audit.Ignored
-		rec.Why = "the delivery's actor requested their own review"
+		rec.Why = "the delivery's actor is the login to wake"
 		return
 	}
 	profile, ok := rc.agents[login]
 	if !ok {
 		rec.Decision = audit.Ignored
-		rec.Why = fmt.Sprintf("reviewer %q is not a configured agent", login)
+		rec.Why = fmt.Sprintf("%q is not a configured agent", login)
 		return
 	}
 
-	reason := fmt.Sprintf("Dispatch: review requested on %s#%d", rec.Repository, rec.Number)
 	rec.Profile = profile
 	rec.Reason = reason
 	if err := rc.runner.Start(profile, reason); err != nil {

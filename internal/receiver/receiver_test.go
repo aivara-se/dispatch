@@ -172,6 +172,16 @@ func workflowRunBody(action, conclusion, actor string, numbers ...int) string {
 	}`, action, testRepo, conclusion, actor, strings.Join(pullRequests, ","), actor)
 }
 
+func commentBody(number int, action, association, sender, text string) string {
+	return fmt.Sprintf(`{
+		"action": %q,
+		"repository": {"full_name": %q},
+		"issue": {"number": %d},
+		"comment": {"body": %q, "author_association": %q},
+		"sender": {"login": %q}
+	}`, action, testRepo, number, text, association, sender)
+}
+
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
 	// The body is not JSON: a 400 here would mean it had been parsed.
 	const body = `{"action":`
@@ -573,6 +583,189 @@ func TestFailedCheckIsNotBlockedByTheReviewCap(t *testing.T) {
 	}
 	if len(runner.calls) != MaxRounds+1 {
 		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+}
+
+func TestMentionWakesEachAgentOnce(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := commentBody(124, "created", "MEMBER", "thani-sh",
+		"@thani-sh-meme and @Thani-Sh-Mama; @thani-sh-meme again.")
+
+	if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := []call{
+		{profile: "mama", reason: "Dispatch: mentioned on aivara-se/dispatch#124"},
+		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#124"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	for i := range want {
+		if runner.calls[i] != want[i] {
+			t.Fatalf("calls[%d] = %+v, want %+v", i, runner.calls[i], want[i])
+		}
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Profile != "mama,meme" || got.Number != 124 {
+		t.Fatalf("record = %+v, want started on 124 by mama,meme", got)
+	}
+}
+
+func TestMentionMatchIsBounded(t *testing.T) {
+	cases := []struct {
+		text string
+		wake bool
+	}{
+		{"@thani-sh-mama-2", false},
+		{"x@thani-sh-meme", false},
+		{"@thani-sh-memex", false},
+		{"(@thani-sh-meme)", true},
+		{"@THANI-SH-MEME", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.text, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+			body := commentBody(124, "created", "MEMBER", "thani-sh", tc.text)
+
+			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if tc.wake {
+				if len(runner.calls) != 1 || runner.calls[0].profile != "meme" {
+					t.Fatalf("calls = %+v, want one run for meme", runner.calls)
+				}
+				return
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, "no configured agent was mentioned") {
+				t.Fatalf("record = %+v, want ignored for no mention", got)
+			}
+		})
+	}
+}
+
+func TestMentionNeedsAnAssociation(t *testing.T) {
+	const text = "@thani-sh-meme"
+
+	for _, association := range []string{"OWNER", "MEMBER", "COLLABORATOR"} {
+		t.Run(association, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, _ := newReceiver(runner)
+			body := commentBody(124, "created", association, "thani-sh", text)
+
+			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 1 {
+				t.Fatalf("runs started = %d, want 1", len(runner.calls))
+			}
+		})
+	}
+
+	for _, association := range []string{"CONTRIBUTOR", "NONE", "FIRST_TIMER", ""} {
+		t.Run("denied/"+association, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+			body := commentBody(124, "created", association, "thani-sh", text)
+
+			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, "association") {
+				t.Fatalf("record = %+v, want ignored for the association", got)
+			}
+		})
+	}
+}
+
+func TestMentionSkipsItsActor(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := commentBody(124, "created", "MEMBER", "thani-sh-meme", "@thani-sh-meme")
+
+	if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runs started = %d, want 0", len(runner.calls))
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Ignored || !strings.Contains(got.Why, "actor") {
+		t.Fatalf("record = %+v, want ignored for the actor", got)
+	}
+}
+
+func TestMentionIgnoresOtherActions(t *testing.T) {
+	for _, action := range []string{"edited", "deleted"} {
+		t.Run(action, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+			body := commentBody(124, action, "MEMBER", "thani-sh", "@thani-sh-meme")
+
+			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, "is not a delivery that acts") {
+				t.Fatalf("record = %+v, want ignored for the action", got)
+			}
+		})
+	}
+}
+
+func TestMentionDedup(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := commentBody(124, "created", "MEMBER", "thani-sh", "@thani-sh-meme")
+
+	for i := 0; i < 2; i++ {
+		if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", w.Code)
+		}
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runs started = %d, want 1", len(runner.calls))
+	}
+	if got := recorder.records[1].Decision; got != audit.Duplicate {
+		t.Fatalf("second decision = %q, want duplicate", got)
+	}
+}
+
+// TestMentionIgnoresTheReviewCap pins that a mention has no count: a pull
+// request at ten rounds still wakes an agent named in a comment.
+func TestMentionIgnoresTheReviewCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	body := commentBody(105, "created", "MEMBER", "thani-sh", "@thani-sh-meme")
+	if w := post(rc, "issue_comment", "mention", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("mention: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+	if got := runner.calls[len(runner.calls)-1].profile; got != "meme" {
+		t.Fatalf("mention profile = %q, want meme", got)
 	}
 }
 
@@ -983,6 +1176,14 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"sender": {"login": "thani-sh-meme"}
 	}`, sentinel, sentinel, sentinel, sentinel)
 
+	mentioned := fmt.Sprintf(`{
+		"action": "created",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"issue": {"number": 124, "title": %q, "body": %q},
+		"comment": {"body": %q, "author_association": "MEMBER"},
+		"sender": {"login": "thani-sh"}
+	}`, sentinel, sentinel, sentinel, sentinel+" @thani-sh-meme "+sentinel)
+
 	cases := []struct {
 		name    string
 		event   string
@@ -1009,6 +1210,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"checks failed", "workflow_run", failedRun, "meme",
 			"Dispatch: checks failed on aivara-se/dispatch#105",
+		},
+		{
+			"mentioned", "issue_comment", mentioned, "meme",
+			"Dispatch: mentioned on aivara-se/dispatch#124",
 		},
 	}
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -97,6 +98,10 @@ type payload struct {
 			Number int `json:"number"`
 		} `json:"pull_requests"`
 	} `json:"workflow_run"`
+	Comment struct {
+		Body              string `json:"body"`
+		AuthorAssociation string `json:"author_association"`
+	} `json:"comment"`
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
@@ -134,7 +139,7 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Answer:     http.StatusAccepted,
 	}
 	switch event {
-	case "issues":
+	case "issues", "issue_comment":
 		rec.Number = p.Issue.Number
 	case "workflow_run":
 		if len(p.WorkflowRun.PullRequests) > 0 {
@@ -168,7 +173,8 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	changes := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "changes_requested"
 	assigned := (rec.Event == "issues" || rec.Event == "pull_request") && p.Action == "assigned"
 	failed := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" && len(p.WorkflowRun.PullRequests) > 0
-	if !review && !changes && !assigned && !failed {
+	mentioned := rec.Event == "issue_comment" && p.Action == "created"
+	if !review && !changes && !assigned && !failed && !mentioned {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("event %q with action %q is not a delivery that acts", rec.Event, p.Action)
 		return
@@ -180,7 +186,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rc.seen.add(rec.Delivery)
 
-	if !assigned && !failed && rc.rounds.reached(rec.Repository, rec.Number) {
+	if (review || changes) && rc.rounds.reached(rec.Repository, rec.Number) {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
 		return
@@ -192,6 +198,10 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	if changes {
 		rc.rounds.add(rec.Repository, rec.Number)
+	}
+	if mentioned {
+		rc.decideMention(rec, p)
+		return
 	}
 
 	var login, reason string
@@ -245,6 +255,99 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	if failed {
 		rc.failures.add(rec.Repository, rec.Number)
 	}
+}
+
+// decideMention wakes each configured agent named in a comment, once.
+func (rc *Receiver) decideMention(rec *audit.Record, p *payload) {
+	if !mayMention(p.Comment.AuthorAssociation) {
+		rec.Decision = audit.Ignored
+		rec.Why = fmt.Sprintf("author association %q may not summon an agent", p.Comment.AuthorAssociation)
+		return
+	}
+	logins := mentionedLogins(p.Comment.Body, rc.agents)
+	if len(logins) == 0 {
+		rec.Decision = audit.Ignored
+		rec.Why = "no configured agent was mentioned"
+		return
+	}
+
+	profiles := make([]string, 0, len(logins))
+	for _, login := range logins {
+		if login != p.Sender.Login {
+			profiles = append(profiles, rc.agents[login])
+		}
+	}
+	if len(profiles) == 0 {
+		rec.Decision = audit.Ignored
+		rec.Why = "the delivery's actor is the login to wake"
+		return
+	}
+
+	reason := fmt.Sprintf("Dispatch: mentioned on %s#%d", rec.Repository, rec.Number)
+	rec.Profile = strings.Join(profiles, ",")
+	rec.Reason = reason
+	var startErr error
+	for _, profile := range profiles {
+		if err := rc.runner.Start(profile, reason); err != nil && startErr == nil {
+			startErr = err
+		}
+	}
+	if startErr != nil {
+		rec.Decision = audit.StartFailed
+		rec.Why = startErr.Error()
+		return
+	}
+	rec.Decision = audit.Started
+}
+
+// mayMention reports whether a comment's author association may summon an
+// agent.
+func mayMention(association string) bool {
+	switch association {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	}
+	return false
+}
+
+// mentionedLogins returns the configured logins named exactly in body, once
+// each and sorted.
+func mentionedLogins(body string, agents map[string]string) []string {
+	var logins []string
+	for login := range agents {
+		if mentions(body, login) {
+			logins = append(logins, login)
+		}
+	}
+	sort.Strings(logins)
+	return logins
+}
+
+// mentions reports whether body names login as @login, bounded so a longer
+// login or a preceding login character does not match.
+func mentions(body, login string) bool {
+	for i := 0; i+1+len(login) <= len(body); i++ {
+		if body[i] != '@' {
+			continue
+		}
+		if i > 0 && isLoginByte(body[i-1]) {
+			continue
+		}
+		if !strings.EqualFold(body[i+1:i+1+len(login)], login) {
+			continue
+		}
+		end := i + 1 + len(login)
+		if end < len(body) && isLoginByte(body[end]) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isLoginByte reports whether b can be part of a GitHub login.
+func isLoginByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-'
 }
 
 // counter is an in-memory cap per pull request.

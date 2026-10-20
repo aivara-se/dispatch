@@ -103,14 +103,14 @@ func reviewBody(action, sender, reviewer string) string {
 	}`, action, reviewer, sender)
 }
 
-func changesBody(state, sender, author string) string {
+func changesBody(action, state, sender, author string) string {
 	return fmt.Sprintf(`{
-		"action": "submitted",
+		"action": %q,
 		"repository": {"full_name": "aivara-se/dispatch"},
 		"pull_request": {"number": 105, "user": {"login": %q}},
 		"review": {"state": %q},
 		"sender": {"login": %q}
-	}`, author, state, sender)
+	}`, action, author, state, sender)
 }
 
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
@@ -267,7 +267,7 @@ func TestActorIsNeverWoken(t *testing.T) {
 func TestChangesRequestedWakesAuthor(t *testing.T) {
 	runner := &stubRunner{}
 	rc, recorder := newReceiver(runner)
-	body := changesBody("changes_requested", "thani-sh-meme", "thani-sh-mama")
+	body := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
@@ -282,11 +282,18 @@ func TestChangesRequestedWakesAuthor(t *testing.T) {
 }
 
 func TestReviewWithoutChangesWakesNobody(t *testing.T) {
-	for _, state := range []string{"approved", "commented"} {
-		t.Run(state, func(t *testing.T) {
+	cases := []struct{ action, state string }{
+		{"submitted", "approved"},
+		{"submitted", "commented"},
+		{"edited", "changes_requested"},
+		{"dismissed", "changes_requested"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.action+"/"+tc.state, func(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
-			body := changesBody(state, "thani-sh-meme", "thani-sh-mama")
+			body := changesBody(tc.action, tc.state, "thani-sh-meme", "thani-sh-mama")
 
 			if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
@@ -357,14 +364,8 @@ func TestRunThatCannotStartIsRecorded(t *testing.T) {
 
 func TestEndToEndSignedPostStartsRun(t *testing.T) {
 	const sentinel = "SENTINEL-3f9c"
-	capture := filepath.Join(t.TempDir(), "argv")
-	t.Setenv("DISPATCH_TEST_ARGV", capture)
 
-	recorder := &memAudit{}
-	agents := map[string]string{"thani-sh-meme": "meme"}
-	rc := New([]byte(testSecret), agents, run.New(os.Args[0]), recorder)
-
-	body := fmt.Sprintf(`{
+	reviewRequested := fmt.Sprintf(`{
 		"action": "review_requested",
 		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
 		"pull_request": {
@@ -380,46 +381,85 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"files": [{"filename": %q}]
 	}`, sentinel, sentinel, sentinel, sentinel, sentinel, sentinel, sentinel)
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", w.Code)
+	changesRequested := fmt.Sprintf(`{
+		"action": "submitted",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"pull_request": {
+			"number": 105,
+			"title": %q,
+			"body": %q,
+			"head": {"ref": %q},
+			"user": {"login": "thani-sh-mama"}
+		},
+		"review": {"state": "changes_requested", "body": %q},
+		"sender": {"login": "thani-sh-meme"},
+		"files": [{"filename": %q}]
+	}`, sentinel, sentinel, sentinel, sentinel, sentinel, sentinel)
+
+	cases := []struct {
+		name    string
+		event   string
+		body    string
+		profile string
+		reason  string
+	}{
+		{
+			"review requested", "pull_request", reviewRequested, "meme",
+			"Dispatch: review requested on aivara-se/dispatch#105",
+		},
+		{
+			"changes requested", "pull_request_review", changesRequested, "mama",
+			"Dispatch: changes requested on aivara-se/dispatch#105",
+		},
 	}
 
-	var args []string
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		data, err := os.ReadFile(capture)
-		if err == nil && len(data) > 0 {
-			args = strings.Split(string(data), "\n")
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("fake hermes captured no argv: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := filepath.Join(t.TempDir(), "argv")
+			t.Setenv("DISPATCH_TEST_ARGV", capture)
 
-	want := []string{
-		"--profile", "meme",
-		"chat", "-q",
-		"Dispatch: review requested on aivara-se/dispatch#105",
-	}
-	if len(args) != len(want) {
-		t.Fatalf("argv = %q, want %q", args, want)
-	}
-	for i := range want {
-		if args[i] != want[i] {
-			t.Fatalf("argv[%d] = %q, want %q", i, args[i], want[i])
-		}
-		if strings.Contains(args[i], sentinel) {
-			t.Fatalf("argv[%d] carries payload text: %q", i, args[i])
-		}
-	}
+			recorder := &memAudit{}
+			agents := map[string]string{"thani-sh-meme": "meme", "thani-sh-mama": "mama"}
+			rc := New([]byte(testSecret), agents, run.New(os.Args[0]), recorder)
 
-	if len(recorder.records) != 1 {
-		t.Fatalf("audit records = %d, want 1", len(recorder.records))
-	}
-	if got := recorder.records[0].Reason; got != want[len(want)-1] {
-		t.Fatalf("recorded reason = %q, want %q", got, want[len(want)-1])
+			if w := post(rc, tc.event, "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+
+			var args []string
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				data, err := os.ReadFile(capture)
+				if err == nil && len(data) > 0 {
+					args = strings.Split(string(data), "\n")
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("fake hermes captured no argv: %v", err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			want := []string{"--profile", tc.profile, "chat", "-q", tc.reason}
+			if len(args) != len(want) {
+				t.Fatalf("argv = %q, want %q", args, want)
+			}
+			for i := range want {
+				if args[i] != want[i] {
+					t.Fatalf("argv[%d] = %q, want %q", i, args[i], want[i])
+				}
+				if strings.Contains(args[i], sentinel) {
+					t.Fatalf("argv[%d] carries payload text: %q", i, args[i])
+				}
+			}
+
+			if len(recorder.records) != 1 {
+				t.Fatalf("audit records = %d, want 1", len(recorder.records))
+			}
+			if got := recorder.records[0].Reason; got != want[len(want)-1] {
+				t.Fatalf("recorded reason = %q, want %q", got, want[len(want)-1])
+			}
+		})
 	}
 }
 

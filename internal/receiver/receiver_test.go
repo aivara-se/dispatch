@@ -93,32 +93,42 @@ func post(rc *Receiver, event, delivery, body string, signature string) *httptes
 	return w
 }
 
+const testRepo = "aivara-se/dispatch"
+
 func reviewBody(action, sender, reviewer string) string {
-	return reviewBodyOn(105, action, sender, reviewer)
+	return reviewBodyAt(testRepo, 105, action, sender, reviewer)
 }
 
 func reviewBodyOn(number int, action, sender, reviewer string) string {
+	return reviewBodyAt(testRepo, number, action, sender, reviewer)
+}
+
+func reviewBodyAt(repository string, number int, action, sender, reviewer string) string {
 	return fmt.Sprintf(`{
 		"action": %q,
-		"repository": {"full_name": "aivara-se/dispatch"},
+		"repository": {"full_name": %q},
 		"pull_request": {"number": %d},
 		"requested_reviewer": {"login": %q},
 		"sender": {"login": %q}
-	}`, action, number, reviewer, sender)
+	}`, action, repository, number, reviewer, sender)
 }
 
 func changesBody(action, state, sender, author string) string {
-	return changesBodyOn(105, action, state, sender, author)
+	return changesBodyAt(testRepo, 105, action, state, sender, author)
 }
 
 func changesBodyOn(number int, action, state, sender, author string) string {
+	return changesBodyAt(testRepo, number, action, state, sender, author)
+}
+
+func changesBodyAt(repository string, number int, action, state, sender, author string) string {
 	return fmt.Sprintf(`{
 		"action": %q,
-		"repository": {"full_name": "aivara-se/dispatch"},
+		"repository": {"full_name": %q},
 		"pull_request": {"number": %d, "user": {"login": %q}},
 		"review": {"state": %q},
 		"sender": {"login": %q}
-	}`, action, number, author, state, sender)
+	}`, action, repository, number, author, state, sender)
 }
 
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
@@ -357,6 +367,32 @@ func TestOnlyChangesRequestedCountsRounds(t *testing.T) {
 	}
 	if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
 		t.Fatalf("tenth round decision = %q, want started", got)
+	}
+}
+
+// TestCapIsPerRepositoryAndNumber pins that the cap counts one pull request,
+// not one number: a repository's ten rounds leave another repository's pull
+// request of the same number free to wake.
+func TestCapIsPerRepositoryAndNumber(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	capped := changesBodyAt("aivara-se/dispatch", 105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), capped, sign(capped)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+
+	other := reviewBodyAt("aivara-se/other", 105, "review_requested", "thani-sh", "thani-sh-meme")
+	if w := post(rc, "pull_request", "other", other, sign(other)); w.Code != http.StatusAccepted {
+		t.Fatalf("other repository: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+	if got := runner.calls[len(runner.calls)-1].profile; got != "meme" {
+		t.Fatalf("last run profile = %q, want meme", got)
 	}
 }
 

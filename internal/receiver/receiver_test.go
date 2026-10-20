@@ -155,6 +155,23 @@ func prAssignBody(action, sender, assignee string) string {
 	}`, action, testRepo, assignee, sender)
 }
 
+func workflowRunBody(action, conclusion, actor string, numbers ...int) string {
+	pullRequests := make([]string, len(numbers))
+	for i, number := range numbers {
+		pullRequests[i] = fmt.Sprintf(`{"number": %d}`, number)
+	}
+	return fmt.Sprintf(`{
+		"action": %q,
+		"repository": {"full_name": %q},
+		"workflow_run": {
+			"conclusion": %q,
+			"actor": {"login": %q},
+			"pull_requests": [%s]
+		},
+		"sender": {"login": %q}
+	}`, action, testRepo, conclusion, actor, strings.Join(pullRequests, ","), actor)
+}
+
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
 	// The body is not JSON: a 400 here would mean it had been parsed.
 	const body = `{"action":`
@@ -404,8 +421,8 @@ func TestPullRequestAssignmentWakesNobody(t *testing.T) {
 	}{
 		{"unconfigured assignee", prAssignBody("assigned", "thani-sh", "thani-sh-missing"), "not a configured agent"},
 		{"self assigned", prAssignBody("assigned", "thani-sh-meme", "thani-sh-meme"), "actor"},
-		{"opened", prAssignBody("opened", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
-		{"edited", prAssignBody("edited", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
+		{"opened", prAssignBody("opened", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
+		{"edited", prAssignBody("edited", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 	}
 
 	for _, tc := range cases {
@@ -427,16 +444,148 @@ func TestPullRequestAssignmentWakesNobody(t *testing.T) {
 	}
 }
 
+func TestFailedCheckWakesPusher(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	// The sender is the actor: 010 overrides the actor exclusion here. Two pull
+	// requests in one run: the first is the pointer, and only one run starts.
+	body := workflowRunBody("completed", "failure", "thani-sh-meme", 105, 106)
+
+	if w := post(rc, "workflow_run", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Number != 105 {
+		t.Fatalf("record = %+v, want started on 105", got)
+	}
+}
+
+func TestFailedCheckWakesNobody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		why  string
+	}{
+		{"success", workflowRunBody("completed", "success", "thani-sh-meme", 105), "is not a delivery that acts"},
+		{"cancelled", workflowRunBody("completed", "cancelled", "thani-sh-meme", 105), "is not a delivery that acts"},
+		{"timed out", workflowRunBody("completed", "timed_out", "thani-sh-meme", 105), "is not a delivery that acts"},
+		{"skipped", workflowRunBody("completed", "skipped", "thani-sh-meme", 105), "is not a delivery that acts"},
+		{"no pull request", workflowRunBody("completed", "failure", "thani-sh-meme"), "is not a delivery that acts"},
+		{"another action", workflowRunBody("requested", "failure", "thani-sh-meme", 105), "is not a delivery that acts"},
+		{"unconfigured actor", workflowRunBody("completed", "failure", "thani-sh-missing", 105), "not a configured agent"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+
+			if w := post(rc, "workflow_run", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, tc.why) {
+				t.Fatalf("record = %+v, want ignored because %q", got, tc.why)
+			}
+		})
+	}
+}
+
+func TestFailedCheckStopsAfterFiveWakes(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+
+	// A failure that wakes nobody spends no budget.
+	unconfigured := workflowRunBody("completed", "failure", "thani-sh-missing", 105)
+	if w := post(rc, "workflow_run", "unconfigured", unconfigured, sign(unconfigured)); w.Code != http.StatusAccepted {
+		t.Fatalf("unconfigured: status = %d, want 202", w.Code)
+	}
+
+	body := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
+	for i := 1; i <= MaxFailures; i++ {
+		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("wake %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if len(runner.calls) != MaxFailures {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures)
+	}
+
+	if w := post(rc, "workflow_run", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("sixth: status = %d, want 202", w.Code)
+	}
+	last := recorder.records[len(recorder.records)-1]
+	if last.Decision != audit.Ignored || !strings.Contains(last.Why, "cap") {
+		t.Fatalf("record = %+v, want ignored for the cap", last)
+	}
+	if len(runner.calls) != MaxFailures {
+		t.Fatalf("runs started = %d, want %d after the cap", len(runner.calls), MaxFailures)
+	}
+}
+
+// TestFailedChecksDoNotSpendTheReviewCap pins the second counter: five failing
+// runs leave the ten-round review budget untouched.
+func TestFailedChecksDoNotSpendTheReviewCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	failure := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
+
+	for i := 1; i <= MaxFailures; i++ {
+		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), failure, sign(failure)); w.Code != http.StatusAccepted {
+			t.Fatalf("failure %d: status = %d, want 202", i, w.Code)
+		}
+	}
+
+	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if len(runner.calls) != MaxFailures+MaxRounds {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures+MaxRounds)
+	}
+}
+
+// TestFailedCheckIsNotBlockedByTheReviewCap pins the guard on the round count:
+// a pull request at ten rounds still wakes its pusher on a failure.
+func TestFailedCheckIsNotBlockedByTheReviewCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+
+	failure := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
+	if w := post(rc, "workflow_run", "failure", failure, sign(failure)); w.Code != http.StatusAccepted {
+		t.Fatalf("failure: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+}
+
 func TestIssueDeliveryWakesNobody(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
 		why  string
 	}{
-		{"opened", issueBody("opened", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
-		{"edited", issueBody("edited", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
-		{"labeled", issueBody("labeled", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
-		{"unassigned", issueBody("unassigned", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
+		{"opened", issueBody("opened", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
+		{"edited", issueBody("edited", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
+		{"labeled", issueBody("labeled", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
+		{"unassigned", issueBody("unassigned", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 		{"unconfigured assignee", issueBody("assigned", "thani-sh", "thani-sh-missing"), "not a configured agent"},
 		{"self assigned", issueBody("assigned", "thani-sh-meme", "thani-sh-meme"), "actor"},
 	}
@@ -820,6 +969,20 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"sender": {"login": "thani-sh"}
 	}`, sentinel, sentinel, sentinel, sentinel)
 
+	failedRun := fmt.Sprintf(`{
+		"action": "completed",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"workflow_run": {
+			"conclusion": "failure",
+			"name": %q,
+			"display_title": %q,
+			"head_branch": %q,
+			"actor": {"login": "thani-sh-meme"},
+			"pull_requests": [{"number": 105}]
+		},
+		"sender": {"login": "thani-sh-meme"}
+	}`, sentinel, sentinel, sentinel, sentinel)
+
 	cases := []struct {
 		name    string
 		event   string
@@ -842,6 +1005,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"pull request assigned", "pull_request", prAssigned, "meme",
 			"Dispatch: pull request assigned on aivara-se/dispatch#105",
+		},
+		{
+			"checks failed", "workflow_run", failedRun, "meme",
+			"Dispatch: checks failed on aivara-se/dispatch#105",
 		},
 	}
 

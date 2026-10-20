@@ -27,6 +27,9 @@ const DedupTTL = time.Hour
 // request wakes nobody.
 const MaxRounds = 10
 
+// MaxFailures is the number of failed-check wakes a pull request gets.
+const MaxFailures = 5
+
 // Runner starts a profile's run.
 type Runner interface {
 	Start(profile, reason string) error
@@ -39,24 +42,26 @@ type Recorder interface {
 
 // Receiver answers the one webhook route.
 type Receiver struct {
-	secret []byte
-	agents map[string]string
-	runner Runner
-	audit  Recorder
-	seen   *seen
-	rounds *rounds
+	secret   []byte
+	agents   map[string]string
+	runner   Runner
+	audit    Recorder
+	seen     *seen
+	rounds   *counter
+	failures *counter
 }
 
 // New returns a Receiver for the given secret and configured login-to-profile
 // map.
 func New(secret []byte, agents map[string]string, runner Runner, recorder Recorder) *Receiver {
 	return &Receiver{
-		secret: secret,
-		agents: agents,
-		runner: runner,
-		audit:  recorder,
-		seen:   newSeen(DedupTTL, time.Now),
-		rounds: newRounds(),
+		secret:   secret,
+		agents:   agents,
+		runner:   runner,
+		audit:    recorder,
+		seen:     newSeen(DedupTTL, time.Now),
+		rounds:   newCounter(MaxRounds),
+		failures: newCounter(MaxFailures),
 	}
 }
 
@@ -83,6 +88,15 @@ type payload struct {
 	Assignee *struct {
 		Login string `json:"login"`
 	} `json:"assignee"`
+	WorkflowRun struct {
+		Conclusion string `json:"conclusion"`
+		Actor      struct {
+			Login string `json:"login"`
+		} `json:"actor"`
+		PullRequests []struct {
+			Number int `json:"number"`
+		} `json:"pull_requests"`
+	} `json:"workflow_run"`
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
@@ -119,8 +133,13 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Number:     p.PullRequest.Number,
 		Answer:     http.StatusAccepted,
 	}
-	if event == "issues" {
+	switch event {
+	case "issues":
 		rec.Number = p.Issue.Number
+	case "workflow_run":
+		if len(p.WorkflowRun.PullRequests) > 0 {
+			rec.Number = p.WorkflowRun.PullRequests[0].Number
+		}
 	}
 	rc.decide(&rec, &p)
 	if err := rc.audit.Append(rec); err != nil {
@@ -148,9 +167,10 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	review := rec.Event == "pull_request" && p.Action == "review_requested"
 	changes := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "changes_requested"
 	assigned := (rec.Event == "issues" || rec.Event == "pull_request") && p.Action == "assigned"
-	if !review && !changes && !assigned {
+	failed := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" && len(p.WorkflowRun.PullRequests) > 0
+	if !review && !changes && !assigned && !failed {
 		rec.Decision = audit.Ignored
-		rec.Why = fmt.Sprintf("event %q with action %q is not a review request or an assignment", rec.Event, p.Action)
+		rec.Why = fmt.Sprintf("event %q with action %q is not a delivery that acts", rec.Event, p.Action)
 		return
 	}
 	if rc.seen.has(rec.Delivery) {
@@ -160,9 +180,14 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rc.seen.add(rec.Delivery)
 
-	if !assigned && rc.rounds.reached(rec.Repository, rec.Number) {
+	if !assigned && !failed && rc.rounds.reached(rec.Repository, rec.Number) {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
+		return
+	}
+	if failed && rc.failures.reached(rec.Repository, rec.Number) {
+		rec.Decision = audit.Ignored
+		rec.Why = fmt.Sprintf("the %d-wake cap was reached", MaxFailures)
 		return
 	}
 	if changes {
@@ -182,6 +207,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	case changes:
 		login = p.PullRequest.User.Login
 		reason = fmt.Sprintf("Dispatch: changes requested on %s#%d", rec.Repository, rec.Number)
+	case failed:
+		login = p.WorkflowRun.Actor.Login
+		reason = fmt.Sprintf("Dispatch: checks failed on %s#%d", rec.Repository, rec.Number)
 	default:
 		if p.Assignee == nil || p.Assignee.Login == "" {
 			rec.Decision = audit.Ignored
@@ -194,7 +222,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 			reason = fmt.Sprintf("Dispatch: pull request assigned on %s#%d", rec.Repository, rec.Number)
 		}
 	}
-	if p.Sender.Login == login {
+	if !failed && p.Sender.Login == login {
 		rec.Decision = audit.Ignored
 		rec.Why = "the delivery's actor is the login to wake"
 		return
@@ -214,11 +242,15 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		return
 	}
 	rec.Decision = audit.Started
+	if failed {
+		rc.failures.add(rec.Repository, rec.Number)
+	}
 }
 
-// rounds counts the reviews that requested changes, per pull request.
-type rounds struct {
+// counter is an in-memory cap per pull request.
+type counter struct {
 	mu    sync.Mutex
+	limit int
 	count map[prKey]int
 }
 
@@ -227,24 +259,24 @@ type prKey struct {
 	number     int
 }
 
-func newRounds() *rounds {
-	return &rounds{count: make(map[prKey]int)}
+func newCounter(limit int) *counter {
+	return &counter{limit: limit, count: make(map[prKey]int)}
 }
 
-// reached reports whether the pull request has had the cap's rounds.
-func (r *rounds) reached(repository string, number int) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.count[prKey{repository, number}] >= MaxRounds
+// reached reports whether the pull request has reached the counter's limit.
+func (c *counter) reached(repository string, number int) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count[prKey{repository, number}] >= c.limit
 }
 
-// add records one round for the pull request.
-func (r *rounds) add(repository string, number int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// add records one event for the pull request.
+func (c *counter) add(repository string, number int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	key := prKey{repository, number}
-	if r.count[key] < MaxRounds {
-		r.count[key]++
+	if c.count[key] < c.limit {
+		c.count[key]++
 	}
 }
 

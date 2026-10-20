@@ -72,8 +72,11 @@ type payload struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
 	PullRequest struct {
-		Number int `json:"number"`
-		User   struct {
+		Number    int             `json:"number"`
+		State     string          `json:"state"`
+		Draft     bool            `json:"draft"`
+		AutoMerge json.RawMessage `json:"auto_merge"`
+		User      struct {
 			Login string `json:"login"`
 		} `json:"user"`
 	} `json:"pull_request"`
@@ -174,7 +177,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	assigned := (rec.Event == "issues" || rec.Event == "pull_request") && p.Action == "assigned"
 	failed := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" && len(p.WorkflowRun.PullRequests) > 0
 	mentioned := rec.Event == "issue_comment" && p.Action == "created"
-	if !review && !changes && !assigned && !failed && !mentioned {
+	approved := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "approved" &&
+		p.PullRequest.State == "open" && !p.PullRequest.Draft && unarmed(p.PullRequest.AutoMerge)
+	if !review && !changes && !assigned && !failed && !mentioned && !approved {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("event %q with action %q is not a delivery that acts", rec.Event, p.Action)
 		return
@@ -220,6 +225,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	case failed:
 		login = p.WorkflowRun.Actor.Login
 		reason = fmt.Sprintf("Dispatch: checks failed on %s#%d", rec.Repository, rec.Number)
+	case approved:
+		login = p.PullRequest.User.Login
+		reason = fmt.Sprintf("Dispatch: approved but not armed on %s#%d", rec.Repository, rec.Number)
 	default:
 		if p.Assignee == nil || p.Assignee.Login == "" {
 			rec.Decision = audit.Ignored
@@ -255,6 +263,11 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	if failed {
 		rc.failures.add(rec.Repository, rec.Number)
 	}
+}
+
+// unarmed reports whether a pull request's auto_merge is null.
+func unarmed(autoMerge json.RawMessage) bool {
+	return len(autoMerge) == 0 || string(autoMerge) == "null"
 }
 
 // decideMention wakes each configured agent named in a comment, once.

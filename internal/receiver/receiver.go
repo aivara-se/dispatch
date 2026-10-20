@@ -77,6 +77,12 @@ type payload struct {
 	Review struct {
 		State string `json:"state"`
 	} `json:"review"`
+	Issue struct {
+		Number int `json:"number"`
+	} `json:"issue"`
+	Assignee *struct {
+		Login string `json:"login"`
+	} `json:"assignee"`
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
@@ -113,6 +119,9 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Number:     p.PullRequest.Number,
 		Answer:     http.StatusAccepted,
 	}
+	if event == "issues" {
+		rec.Number = p.Issue.Number
+	}
 	rc.decide(&rec, &p)
 	if err := rc.audit.Append(rec); err != nil {
 		log.Printf("dispatch: audit: %v", err)
@@ -138,9 +147,10 @@ func (rc *Receiver) verify(body []byte, header string) bool {
 func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	review := rec.Event == "pull_request" && p.Action == "review_requested"
 	changes := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "changes_requested"
-	if !review && !changes {
+	assigned := rec.Event == "issues" && p.Action == "assigned"
+	if !review && !changes && !assigned {
 		rec.Decision = audit.Ignored
-		rec.Why = fmt.Sprintf("event %q with action %q is not a review request", rec.Event, p.Action)
+		rec.Why = fmt.Sprintf("event %q with action %q is not a review request or an issue assignment", rec.Event, p.Action)
 		return
 	}
 	if rc.seen.has(rec.Delivery) {
@@ -150,7 +160,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rc.seen.add(rec.Delivery)
 
-	if rc.rounds.reached(rec.Repository, rec.Number) {
+	if !assigned && rc.rounds.reached(rec.Repository, rec.Number) {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
 		return
@@ -159,9 +169,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		rc.rounds.add(rec.Repository, rec.Number)
 	}
 
-	login := p.PullRequest.User.Login
-	reason := fmt.Sprintf("Dispatch: changes requested on %s#%d", rec.Repository, rec.Number)
-	if review {
+	var login, reason string
+	switch {
+	case review:
 		if p.RequestedReviewer == nil || p.RequestedReviewer.Login == "" {
 			rec.Decision = audit.Ignored
 			rec.Why = "review was requested from a team, not a login"
@@ -169,6 +179,17 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		}
 		login = p.RequestedReviewer.Login
 		reason = fmt.Sprintf("Dispatch: review requested on %s#%d", rec.Repository, rec.Number)
+	case changes:
+		login = p.PullRequest.User.Login
+		reason = fmt.Sprintf("Dispatch: changes requested on %s#%d", rec.Repository, rec.Number)
+	default:
+		if p.Assignee == nil || p.Assignee.Login == "" {
+			rec.Decision = audit.Ignored
+			rec.Why = "the issue's assignee is missing"
+			return
+		}
+		login = p.Assignee.Login
+		reason = fmt.Sprintf("Dispatch: issue assigned on %s#%d", rec.Repository, rec.Number)
 	}
 	if p.Sender.Login == login {
 		rec.Decision = audit.Ignored

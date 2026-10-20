@@ -1,6 +1,6 @@
 # Dispatch
 
-A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent a pull request asks to review, with the reason. It does not do the work: a wake says *why now*, and the agent re-reads the pull request and reviews it. v1 carries one flow, pull request reviews, and touches no board.
+A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, or the author whose review requests changes. It does not do the work: a wake says *why now*, and the agent re-reads the pull request and acts. v1.1 carries one flow, the review and update loop, and touches no board.
 
 ## Configuration
 
@@ -30,7 +30,7 @@ go build ./cmd/dispatch     # ./dispatch, in the repository root
 ./dispatch --config dispatch.json
 ```
 
-Go 1.26 or newer, standard library only — the module carries no requires. The one flag is `--config`; that file holds everything else, and the webhook secret is read from the environment variable it names.
+Go 1.26 or newer, standard library only — the module carries no requires. The one flag is `--config`; that file holds everything else, the webhook secret is read from the environment variable it names, and the GitHub token from `DISPATCH_GITHUB_TOKEN`.
 
 ## Run it on the host
 
@@ -55,10 +55,11 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-`~/.config/dispatch.env`, mode `600`, holds the webhook secret the configuration names and no other value:
+`~/.config/dispatch.env`, mode `600`, holds the two values the configuration and the service read, and no others:
 
 ```sh
 DISPATCH_WEBHOOK_SECRET=<the secret GitHub is given>
+DISPATCH_GITHUB_TOKEN=<a fine-grained token with Issues: write on the organisation's repositories>
 ```
 
 The reverse proxy in front of it — the only networked hop — forwards the public path to the loopback address the configuration binds:
@@ -85,9 +86,11 @@ The service answers one path, `POST /github` — the path the configuration name
 - **Payload URL** — `https://<hostname>/github`
 - **Content type** — `application/json`. A `form` webhook sends `payload=<urlencoded>`, which the JSON decode refuses; the signature verifies either way, so the tell is the content type.
 - **Secret** — the value in `DISPATCH_WEBHOOK_SECRET`
-- **Events** — pull requests only
+- **Events** — pull requests and pull request reviews
 
-A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run; every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
+A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the author's run, unless the pull request carries the `blocked` label; from the fifth round on, that delivery adds the label instead. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
+
+The `blocked` label must exist in every repository the flow runs on: the service adds it by name and does not create it.
 
 ## Checks
 

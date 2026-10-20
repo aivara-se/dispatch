@@ -182,6 +182,22 @@ func commentBody(number int, action, association, sender, text string) string {
 	}`, action, testRepo, number, text, association, sender)
 }
 
+func approvalBody(state string, draft bool, autoMerge, sender, author string) string {
+	return fmt.Sprintf(`{
+		"action": "submitted",
+		"repository": {"full_name": %q},
+		"pull_request": {
+			"number": 105,
+			"state": %q,
+			"draft": %t,
+			"auto_merge": %s,
+			"user": {"login": %q}
+		},
+		"review": {"state": "approved"},
+		"sender": {"login": %q}
+	}`, testRepo, state, draft, autoMerge, author, sender)
+}
+
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
 	// The body is not JSON: a 400 here would mean it had been parsed.
 	const body = `{"action":`
@@ -769,6 +785,62 @@ func TestMentionIgnoresTheReviewCap(t *testing.T) {
 	}
 }
 
+func TestUnarmedApprovalWakesAuthor(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := approvalBody("open", false, "null", "thani-sh-meme", "thani-sh-mama")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Number != 105 {
+		t.Fatalf("record = %+v, want started on 105", got)
+	}
+}
+
+func TestApprovalWakesNobody(t *testing.T) {
+	cases := []struct {
+		name      string
+		state     string
+		draft     bool
+		autoMerge string
+		sender    string
+		author    string
+		why       string
+	}{
+		{"armed", "open", false, `{"merge_method": "squash"}`, "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"draft", "open", true, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"closed", "closed", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"merged", "merged", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"unconfigured author", "open", false, "null", "thani-sh-meme", "thani-sh-missing", "not a configured agent"},
+		{"actor is the author", "open", false, "null", "thani-sh-meme", "thani-sh-meme", "actor"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+			body := approvalBody(tc.state, tc.draft, tc.autoMerge, tc.sender, tc.author)
+
+			if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, tc.why) {
+				t.Fatalf("record = %+v, want ignored because %q", got, tc.why)
+			}
+		})
+	}
+}
+
 func TestIssueDeliveryWakesNobody(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1184,6 +1256,23 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"sender": {"login": "thani-sh"}
 	}`, sentinel, sentinel, sentinel, sentinel+" @thani-sh-meme "+sentinel)
 
+	unarmedApproval := fmt.Sprintf(`{
+		"action": "submitted",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"pull_request": {
+			"number": 105,
+			"state": "open",
+			"draft": false,
+			"auto_merge": null,
+			"title": %q,
+			"body": %q,
+			"head": {"ref": %q},
+			"user": {"login": "thani-sh-mama"}
+		},
+		"review": {"state": "approved", "body": %q},
+		"sender": {"login": "thani-sh-meme"}
+	}`, sentinel, sentinel, sentinel, sentinel, sentinel)
+
 	cases := []struct {
 		name    string
 		event   string
@@ -1214,6 +1303,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"mentioned", "issue_comment", mentioned, "meme",
 			"Dispatch: mentioned on aivara-se/dispatch#124",
+		},
+		{
+			"approved but not armed", "pull_request_review", unarmedApproval, "mama",
+			"Dispatch: approved but not armed on aivara-se/dispatch#105",
 		},
 	}
 

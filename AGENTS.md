@@ -1,10 +1,10 @@
 # Agent Instructions
 
-Dispatch is a Go service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent a pull request asks to review, with the reason — built for the operator of a small fleet of agents.
+Dispatch is a Go service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent the event concerns — the reviewer a pull request asks for, the author whose review requests changes, or the agent an issue is assigned to — with the reason. It is built for the operator of a small fleet of agents.
 
 ## Current Project Focus
 
-The design is settled and v1 is built: the module and the packages `SYSTEMS.md` describes, with the configuration documented in `README.md`. What remains is the host rollout — the unit, the webhook and the two hand checks `SYSTEMS.md` names. v1 carries one flow, pull request reviews, and touches no board.
+v1.2 is built. v1.3 — an issue's assignment wakes its agent — is designed and in review ([#119](https://github.com/aivara-se/dispatch/pull/119)); the receiver branch and its tests follow in one pull request, and the `issues` subscription on the organisation webhook is the operator's. v1.3 adds no state, no count and no GitHub call, and still touches no board.
 
 This section is steering, not policy. It is the one place where what matters right now outranks the standing rules below, it changes often, and it is replaced rather than appended to. Keep it short enough to read in full, and current enough to be worth reading.
 

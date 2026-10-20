@@ -57,7 +57,7 @@ The service's name tells the agent this is a wake and not the operator speaking;
 
 One organisation webhook, created by an owner of the organisation, subscribed to `pull_request` and `pull_request_review`, and set to content type `json` — a `form` webhook sends `payload=<urlencoded>`, which the JSON decode refuses. Its secret is the value the configuration names, held in the unit's environment and never in the tree.
 
-The service holds one GitHub token for the two calls its one write costs: read the pull request's labels before a wake, and add `blocked` at the cap ([`006`](adrs/006-the-review-loop-and-its-cap.md)). It is a fine-grained token with `Issues: write` on the organisation's repositories; the configuration names it and the unit's environment holds it. The service calls no other endpoint, and the agents act on GitHub with their own credentials, not the service's.
+The service holds one GitHub token for the two calls its one write costs: read the pull request's labels before a wake, and add `blocked` at the cap ([`006`](adrs/006-the-review-loop-and-its-cap.md)). It is a fine-grained token with `Issues: write` on the organisation's repositories, read at boot from `DISPATCH_GITHUB_TOKEN` in the unit's environment; a missing or empty value stops the process at boot, as the webhook secret's does. The name is the service's and only the value is the host's, so the configuration carries no field for it. The service calls no other endpoint, and the agents act on GitHub with their own credentials, not the service's.
 
 ## Storage
 

@@ -2,7 +2,7 @@
 
 ## Context
 
-The service is configured by one document, written on the host it runs on. It is behaviour: what it holds decides what the service does, so a change to its shape is a change to the product. It holds no secret value: the webhook secret and the GitHub token are named and never written. What needs recording is what the document holds, and in what format.
+The service is configured by one document, written on the host it runs on. It is behaviour: what it holds decides what the service does, so a change to its shape is a change to the product. It holds no secret value: the webhook secret is named and never written. What needs recording is what the document holds, and in what format.
 
 ## Decision
 
@@ -12,7 +12,6 @@ The document holds, and holds nothing else — this is the whole of what may be 
 
 - the **listen address** the receiver binds, and the **path** it answers on;
 - the **name of the webhook secret**, which the process resolves from its environment at boot;
-- the **name of the GitHub token** the label write uses ([`006`](006-the-review-loop-and-its-cap.md)), resolved from its environment at boot the same way;
 - the **absolute path of the `hermes` binary** a run launches ([003](003-starting-a-run.md)), which a systemd unit's minimal `PATH` cannot resolve;
 - the **agents**: each one's GitHub login and the local profile that login runs as.
 
@@ -22,4 +21,4 @@ A name that resolves to nothing stops the process at boot rather than at the fir
 
 - Zero dependencies — `001`'s rule needs no exception here.
 - No comments and no trailing commas, so a hand-edited configuration is slightly less pleasant than YAML. Whoever edits it pays that.
-- The document is behaviour, so a change to its shape is a change to the product and not an edit; but the whole of it is five things, and a sixth is a decision before it is a line.
+- The document is behaviour, so a change to its shape is a change to the product and not an edit; but the whole of it is four things, and a fifth is a decision before it is a line.

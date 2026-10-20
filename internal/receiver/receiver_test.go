@@ -145,6 +145,16 @@ func issueBodyOn(number int, action, sender, assignee string) string {
 	}`, action, testRepo, number, assignee, sender)
 }
 
+func prAssignBody(action, sender, assignee string) string {
+	return fmt.Sprintf(`{
+		"action": %q,
+		"repository": {"full_name": %q},
+		"pull_request": {"number": 105},
+		"assignee": {"login": %q},
+		"sender": {"login": %q}
+	}`, action, testRepo, assignee, sender)
+}
+
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
 	// The body is not JSON: a 400 here would mean it had been parsed.
 	const body = `{"action":`
@@ -217,7 +227,6 @@ func TestEventFilter(t *testing.T) {
 	}{
 		{"ping", "ping", `{"zen": "anything"}`},
 		{"another action", "pull_request", reviewBody("opened", "thani-sh", "thani-sh-meme")},
-		{"pull request assignment", "pull_request", reviewBody("assigned", "thani-sh", "thani-sh-meme")},
 		{"another event", "issues", reviewBody("review_requested", "thani-sh", "thani-sh-meme")},
 	}
 
@@ -360,16 +369,74 @@ func TestIssueAssignmentWakesAssignee(t *testing.T) {
 	}
 }
 
+func TestPullRequestAssignmentWakesAssignee(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	// The assignees array names a second configured agent ahead of the
+	// assignee; only the assignee object is the wake set.
+	body := `{
+		"action": "assigned",
+		"repository": {"full_name": "aivara-se/dispatch"},
+		"pull_request": {"number": 105},
+		"assignee": {"login": "thani-sh-meme"},
+		"assignees": [{"login": "thani-sh-mama"}, {"login": "thani-sh-meme"}],
+		"sender": {"login": "thani-sh"}
+	}`
+
+	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "meme", reason: "Dispatch: pull request assigned on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Number != 105 {
+		t.Fatalf("record = %+v, want started on 105", got)
+	}
+}
+
+func TestPullRequestAssignmentWakesNobody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		why  string
+	}{
+		{"unconfigured assignee", prAssignBody("assigned", "thani-sh", "thani-sh-missing"), "not a configured agent"},
+		{"self assigned", prAssignBody("assigned", "thani-sh-meme", "thani-sh-meme"), "actor"},
+		{"opened", prAssignBody("opened", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
+		{"edited", prAssignBody("edited", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+
+			if w := post(rc, "pull_request", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, tc.why) {
+				t.Fatalf("record = %+v, want ignored because %q", got, tc.why)
+			}
+		})
+	}
+}
+
 func TestIssueDeliveryWakesNobody(t *testing.T) {
 	cases := []struct {
 		name string
 		body string
 		why  string
 	}{
-		{"opened", issueBody("opened", "thani-sh", "thani-sh-meme"), "not a review request or an issue assignment"},
-		{"edited", issueBody("edited", "thani-sh", "thani-sh-meme"), "not a review request or an issue assignment"},
-		{"labeled", issueBody("labeled", "thani-sh", "thani-sh-meme"), "not a review request or an issue assignment"},
-		{"unassigned", issueBody("unassigned", "thani-sh", "thani-sh-meme"), "not a review request or an issue assignment"},
+		{"opened", issueBody("opened", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
+		{"edited", issueBody("edited", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
+		{"labeled", issueBody("labeled", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
+		{"unassigned", issueBody("unassigned", "thani-sh", "thani-sh-meme"), "not a review request or an assignment"},
 		{"unconfigured assignee", issueBody("assigned", "thani-sh", "thani-sh-missing"), "not a configured agent"},
 		{"self assigned", issueBody("assigned", "thani-sh-meme", "thani-sh-meme"), "actor"},
 	}
@@ -738,6 +805,21 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"label": {"name": %q}
 	}`, sentinel, sentinel, sentinel, sentinel, sentinel)
 
+	prAssigned := fmt.Sprintf(`{
+		"action": "assigned",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"pull_request": {
+			"number": 105,
+			"title": %q,
+			"body": %q,
+			"head": {"ref": %q},
+			"user": {"login": "thani-sh-mama"}
+		},
+		"assignee": {"login": "thani-sh-meme"},
+		"assignees": [{"login": "thani-sh-meme"}],
+		"sender": {"login": "thani-sh"}
+	}`, sentinel, sentinel, sentinel, sentinel)
+
 	cases := []struct {
 		name    string
 		event   string
@@ -756,6 +838,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"issue assigned", "issues", issueAssigned, "meme",
 			"Dispatch: issue assigned on aivara-se/dispatch#124",
+		},
+		{
+			"pull request assigned", "pull_request", prAssigned, "meme",
+			"Dispatch: pull request assigned on aivara-se/dispatch#105",
 		},
 	}
 

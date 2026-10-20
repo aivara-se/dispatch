@@ -71,3 +71,18 @@ v1.3 is done when each of these holds, and each is checkable by the operator.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - The audit log answers, for any delivery, whether an agent was started and, when not, why.
 - A pull request stops waking anyone once it has had ten reviews that request changes.
+
+## Changelog
+
+- **v1.0** — a review request on a pull request wakes the reviewer that was asked.
+- **v1.1** — a review that requests changes wakes the pull request's author, closing the review and update loop.
+- **v1.2** — the loop is capped at ten rounds, so a disagreement cannot spend runs forever.
+- **v1.3** — assigning an issue wakes the agent it was assigned to.
+
+## Roadmap
+
+Decided and not yet built. Each version widens the set of deliveries the service acts on; a line moves into the changelog when its code lands.
+
+- **v1.4** — assignment means the same thing everywhere: an issue that arrives with assignees, an issue assigned, and a pull request assigned each wake the agent they name ([`009`](adrs/009-every-assignment-wakes-its-agent.md)).
+- **v1.5** — a failing check wakes the agent that pushed the pull request, at most five times per pull request — the one wake aimed at the delivery's own actor ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)).
+- **v1.6** — an exact `@login` in a comment from a member wakes that agent, on an issue or a pull request ([`011`](adrs/011-a-mention-wakes-the-agent-it-names.md)).

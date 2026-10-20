@@ -76,3 +76,13 @@ go test ./...
 The tests must cover: the signature refused before parsing, the event and review-state filter, the issue-assignee filter, the dedup, the ten-round cap and the wake it refuses, the configuration loader's refusals, and one signed POST per flow that starts a run. The reason tests use a fixture whose every text field is a sentinel — no sentinel reaches the argv — and the argv is a fixed sentence above. A fake `hermes` on the configured path captures the argv.
 
 What no test can reach: that Hermes still accepts the argv, and a real delivery through GitHub to a real agent run. Both are checked by hand on the host.
+
+## Planned, not built
+
+The versions [PRODUCT](PRODUCT.md) (*Roadmap*) decides, and the records that fix them. Nothing in this section is in the tree: the sections above describe v1.3, and each of these lands with the tests that name it.
+
+- **v1.4 — assignment everywhere** ([`009`](adrs/009-every-assignment-wakes-its-agent.md)). Two more deliveries act: `issues` with action `opened` when the issue carries assignees, which wakes every configured login in `issue.assignees`; and `pull_request` with action `assigned`, which wakes `assignee.login`. The reason gains `Dispatch: pull request assigned on <repository>#<number>`. No new subscription and no new state.
+- **v1.5 — a failing check** ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)). `workflow_run` with action `completed`, conclusion `failure` and at least one pull request wakes `workflow_run.actor` — the pusher, because the payload names no author. It is the one delivery that wakes its own actor. A second counter joins the review cap in memory: five failed-check wakes per pull request, keyed by repository and number. The reason gains `Dispatch: checks failed on <repository>#<number>`, and the webhook gains `workflow_run`.
+- **v1.6 — a mention** ([`011`](adrs/011-a-mention-wakes-the-agent-it-names.md)). `issue_comment` with action `created` wakes each configured login named exactly in the body, and only when `comment.author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`. The reason gains `Dispatch: mentioned on <repository>#<number>`, and the webhook gains `issue_comment`.
+
+The answer set, the audit line's fields and the on-disk record are unchanged by all three: `202`, the same line, the same file. Storage grows by one counter in v1.5 and by nothing else. The tests each version adds are the filters it introduces — the assignment actions, the failed-check conclusion and its cap, the mention match and the association guard — and the one no test can reach stays the hand check on the host.

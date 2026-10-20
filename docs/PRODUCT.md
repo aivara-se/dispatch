@@ -24,7 +24,7 @@ Every agent reviews. A review is not a card and never takes a developer's slot, 
 
 When an issue is assigned to an agent, the service wakes that agent. The assignment is the whole trigger: the service reads no board, so an issue that is not a card is still an issue, and every repository in the organisation is in scope.
 
-The agent that made the assignment is never woken for it, so an agent cannot start a run by taking an issue itself. A login the configuration does not carry — the operator's, a bot's, a human's — wakes nobody.
+The agent that made the assignment is never woken for it, so an agent cannot start a run by taking an issue itself. A login the configuration does not carry — the operator's, a bot's, a human's — wakes nobody. An issue created with an assignee is an assignment like any other: GitHub delivers `assigned` after `opened`, and the wake is the same one.
 
 ## What it never does
 
@@ -47,7 +47,6 @@ The agent that made the assignment is never woken for it, so an agent cannot sta
 
 Known, and deliberately not handled in this version. Each is a wake that does not happen, or a run that happens twice.
 
-- **An issue created with an assignee on it.** Only `assigned` acts, and creation is `opened`. Whether GitHub also sends `assigned` for an assignment made during creation is unrecorded here; assign after the issue exists.
 - **Several assignees in one change.** Only the payload's `assignee` is read, never its `assignees` array; whether GitHub reports such a change as one delivery per assignee is unrecorded here.
 - **A pull request assigned to an agent.** That arrives as a `pull_request` delivery with action `assigned`, not as `issues`, and v1.3 does not act on it.
 - **An issue unassigned, or reassigned away.** The agent that held it is not woken and is not told.
@@ -83,6 +82,6 @@ v1.3 is done when each of these holds, and each is checkable by the operator.
 
 Decided and not yet built. Each version widens the set of deliveries the service acts on; a line moves into the changelog when its code lands.
 
-- **v1.4** — assignment means the same thing everywhere: an issue that arrives with assignees, an issue assigned, and a pull request assigned each wake the agent they name ([`009`](adrs/009-every-assignment-wakes-its-agent.md)).
+- **v1.4** — assignment means the same thing for a pull request as for an issue: a pull request assigned wakes the agent it names ([`009`](adrs/009-every-assignment-wakes-its-agent.md)).
 - **v1.5** — a failing check wakes the agent that pushed the pull request, at most five times per pull request — the one wake aimed at the delivery's own actor ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)).
 - **v1.6** — an exact `@login` in a comment from a member wakes that agent, on an issue or a pull request ([`011`](adrs/011-a-mention-wakes-the-agent-it-names.md)).

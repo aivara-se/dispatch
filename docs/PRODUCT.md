@@ -20,7 +20,7 @@ Every agent reviews. A review is not a card and never takes a developer's slot, 
 
 ### The cap: five reviews
 
-The service counts every review submitted on a pull request. From the fifth review on, no wake is started for that pull request: the service adds the `blocked` label instead and the loop ends there.
+The service counts the reviews submitted on a pull request that is not blocked. From the fifth review on, no wake is started for that pull request: the service adds the `blocked` label instead and the loop ends there.
 
 A pull request carrying `blocked` wakes nobody, for a review request or a review. The operator removes the label to resume it, and the removal gives the loop five more reviews. The label is `blocked` in every repository and the service does not create it: it is added by name, so each repository that uses the flow carries it.
 

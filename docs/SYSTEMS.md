@@ -13,9 +13,9 @@ The unit, the environment file and the proxy site are `README.md` (*Run it on th
 3. It takes the event and the delivery id from the headers, and the action, the repository, the pull request and — per event — the requested reviewer, the review state and the author from the body.
 4. Two deliveries act: a `pull_request` delivery whose action is `review_requested`, which wakes the requested reviewer; and a `pull_request_review` delivery whose action is `submitted` and whose review state is `changes_requested`, which wakes the author. Every other event, action or review state is accepted and ignored.
 5. The delivery id is checked against the in-memory cache. A delivery already seen is accepted and starts nothing.
-6. A review delivery increments its pull request's count, whatever the review's state.
-7. The login to wake is matched against the configured agents — the requested reviewer, or the pull request's author. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken.
-8. The pull request's labels are read. One carrying `blocked` ends the decision: nobody is woken and the line says why ([`006`](adrs/006-the-review-loop-and-its-cap.md)).
+6. The pull request's labels are read. One carrying `blocked` ends the decision: nobody is woken, nothing is counted, and the line says why ([`006`](adrs/006-the-review-loop-and-its-cap.md)).
+7. A review delivery increments its pull request's count, whatever the review's state.
+8. The login to wake is matched against the configured agents — the requested reviewer, or the pull request's author. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken.
 9. A wake at the cap is refused: from the fifth review on, the label is written instead of a run, and nobody is woken.
 10. One audit line is appended whatever happened ([`005`](adrs/005-the-audit-record.md)).
 
@@ -34,10 +34,10 @@ The argv is a contract with another program — `--profile`/`-p` and `chat -q` a
 
 ## The review count and the label
 
-The count is per pull request and in memory: one number, incremented on every review delivery that is not a duplicate, whatever the review's state.
+The count is per pull request and in memory: one number, incremented on every review delivery that is not a duplicate and arrives on a pull request that is not blocked, whatever the review's state.
 
 - **The cap is five.** From the fifth review on, a delivery that would wake someone does not: the service adds `blocked`, wakes nobody, and clears the count when the write succeeds. Removing the label therefore gives the loop five more reviews, and the service needs no event to notice the removal.
-- **The label is the durable guard.** Before any wake, the service reads the pull request's labels; `blocked` among them ends the decision. That is what makes the block outlast a restart and cover a pull request the operator blocked by hand.
+- **The label is the durable guard.** Before any wake, the service reads the pull request's labels; `blocked` among them ends the decision, and a blocked pull request is not counted. That is what makes the block outlast a restart and cover a pull request the operator blocked by hand.
 - **The read is bounded and fails open.** A read that fails or times out is recorded on the line and the wake goes ahead: a repeated wake costs a run, a withheld review costs the loop.
 - **The write is not retried in place.** A failure is recorded, nobody is woken, and the next review on that pull request tries again.
 - **One name, never created, never removed.** The service adds `blocked` by name through the issues labels endpoint; it does not create the label, and removing it is the operator's act.

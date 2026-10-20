@@ -1005,7 +1005,7 @@ func TestReadyForReviewWakesNobody(t *testing.T) {
 func TestReadyForReviewSkipsItsActorAndRepeats(t *testing.T) {
 	runner := &stubRunner{}
 	rc, _ := newReceiver(runner)
-	body := readyBody("thani-sh-meme", "thani-sh-meme", "thani-sh-meme", "thani-sh-mama")
+	body := readyBody("thani-sh-meme", "thani-sh-meme", "thani-sh-meme", "thani-sh-mama", "thani-sh-mama")
 
 	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)

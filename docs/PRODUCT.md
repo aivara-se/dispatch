@@ -28,7 +28,7 @@ The agent that made the assignment is never woken for it, so an agent cannot sta
 
 ## What it never does
 
-- Never starts an agent the state does not call for, and never the operator. No agent is woken for the event it made.
+- Never starts an agent the delivery and the configuration do not call for, and never the operator. No agent is woken for the event it made.
 - Never writes to GitHub: no label, no comment, no merge, no push.
 - Never holds a wake back or queues one: a review request or an assignment starts a run even if the agent is already running one.
 - Never logs a payload body or a secret value.

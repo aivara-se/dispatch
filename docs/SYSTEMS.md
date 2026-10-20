@@ -22,7 +22,7 @@ The answers are the service's own: `401` a missing or non-verifying signature, `
 
 ## Starting a run
 
-The requirement is that a review request is never delayed. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>"`, launched by the service and not tracked ([`003`](adrs/003-starting-a-run.md)).
+The requirement is that a review request or an assignment is never delayed. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>"`, launched by the service and not tracked ([`003`](adrs/003-starting-a-run.md)).
 
 - **No serialisation.** Every wake starts a run; nothing queues and nothing is held back, so an agent may have several runs at once.
 - **No tracking.** The child is reaped so it does not linger; no run table, no exit bookkeeping, no lifetime bound, nothing reconciled at boot.

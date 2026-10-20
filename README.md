@@ -1,6 +1,6 @@
 # Dispatch
 
-A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, the author whose review requests changes, or the agent an issue is assigned to. It does not do the work: a wake says *why now*, and the agent re-reads the pull request or the issue and acts. v1.3 carries two flows — the review and update loop, capped at ten rounds, and an issue's assignment — and touches no board.
+A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, or the author whose review requests changes. It does not do the work: a wake says *why now*, and the agent re-reads the pull request and acts. v1.2 carries one flow, the review and update loop, capped at ten rounds, and touches no board.
 
 ## Configuration
 
@@ -85,9 +85,9 @@ The service answers one path, `POST /github` — the path the configuration name
 - **Payload URL** — `https://<hostname>/github`
 - **Content type** — `application/json`. A `form` webhook sends `payload=<urlencoded>`, which the JSON decode refuses; the signature verifies either way, so the tell is the content type.
 - **Secret** — the value in `DISPATCH_WEBHOOK_SECRET`
-- **Events** — pull requests, pull request reviews and issues
+- **Events** — pull requests and pull request reviews
 
-A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run. A verified `issues` delivery whose action is `assigned` starts the assignee's run. A pull request stops waking anyone once ten reviews have requested changes. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
+A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run. A pull request stops waking anyone once ten reviews have requested changes. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
 
 ## Checks
 

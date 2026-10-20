@@ -8,18 +8,18 @@ What needs recording is which delivery acts, where the wake target comes from, a
 
 ## Decision
 
-- **One event acts: `issues` with action `assigned`.** Every other `issues` action — `opened`, `edited`, `unassigned`, `labeled`, `closed` and the rest — is accepted and ignored. GitHub documents the action and the payload's `assignee` object (*Webhook events and payloads*, *issues*, docs.github.com, read 2026-10-20).
+- **A third delivery acts: `issues` with action `assigned`.** Every other `issues` action — `opened`, `edited`, `unassigned`, `labeled`, `closed` and the rest — is accepted and ignored. GitHub documents the action and the payload's `assignee` object (*Webhook events and payloads*, *issues*, docs.github.com, read 2026-10-20).
 - **The wake set is the delivery's `assignee`.** Its login is matched against the configured agents, each a GitHub login beside the local profile it runs as; the match names the profile to wake. The payload's `assignees` array is not read, and a login the configuration does not carry wakes nobody.
 - **The delivery's own actor is never woken** — the rule [002](002-github-webhook-ingestion.md) fixed for the reviewer and [006](006-the-review-loop.md) kept for the author. An agent that assigns an issue to itself starts no run.
 - **The reason is identifiers**: `Dispatch: issue assigned on <repository>#<number>`, in the service's own words — never a title, a body, a label or any other text a third party wrote ([002](002-github-webhook-ingestion.md)).
-- **Nothing else changes.** No count, no label, no GitHub API call, no credential, no state beyond the delivery-id cache: the payload and the configuration answer the whole decision, and a wake still costs one child process and no bookkeeping ([003](003-starting-a-run.md)).
+- **Nothing else changes.** The assignment adds no count, no label, no GitHub API call, no credential and no state of its own: the delivery-id cache the receiver already keeps is all of it, and a wake still costs one child process and no bookkeeping ([003](003-starting-a-run.md)).
 - **The delivery is accepted and logged.** `202` whether or not an agent was woken, and the audit line says which profile started and, when not, why ([005](005-the-audit-record.md)).
 
 ## What this overrides
 
-[002](002-github-webhook-ingestion.md) decided that one event acts — `pull_request` with action `review_requested` — and [006](006-the-review-loop.md) had already widened that set once, for the changes-requested review. This record widens it again, and with it `002`'s "one event acts" and `006`'s "Nothing else changes".
+[002](002-github-webhook-ingestion.md) decided that one event acts — `pull_request` with action `review_requested` — and [006](006-the-review-loop.md) had already widened that set once, for the changes-requested review. This record widens it again: `002`'s "One event acts" no longer describes the service, and the "one flow" framing its successors inherited goes with it.
 
-It also parts company with two smaller clauses: [005](005-the-audit-record.md)'s field list names the pull request number, where a line now carries the issue's number for an `issues` delivery, and [003](003-starting-a-run.md)'s Context says the service carries one flow. Everything else in `001`–`007` stands, including `002`'s "the service calls no API" and `003`'s "no serialisation" and "no tracking".
+It also parts company with two smaller clauses: [005](005-the-audit-record.md)'s field list names the pull request number, where a line now carries the issue's number for an `issues` delivery, and [003](003-starting-a-run.md)'s Context says the service carries one flow. Everything else in `001`–`007` stands, including `002`'s "the service calls no API", `003`'s "no serialisation" and "no tracking", and `006`'s "Nothing else changes".
 
 ## Consequences
 

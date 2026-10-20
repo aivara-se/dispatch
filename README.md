@@ -1,6 +1,6 @@
 # Dispatch
 
-A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, the author whose review requests changes, or the agent an assignment names. It does not do the work: a wake says *why now*, and the agent re-reads the pull request or the issue and acts. v1.4 carries two flows: the review and update loop, capped at ten rounds, and an assignment, on an issue or on a pull request. It touches no board.
+A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, the author whose review requests changes or whose change is approved but not armed, the agent an assignment or a comment names, the pusher of a pull request whose checks failed, or the reviewers of a draft marked ready. It does not do the work: a wake says *why now*, and the agent re-reads the pull request or the issue and acts. v1.8 carries five flows: the review and update loop, capped at ten rounds; an assignment, on an issue or on a pull request; a failing check, capped at five wakes; a mention in a comment; and a draft that becomes ready. It touches no board.
 
 ## Configuration
 
@@ -85,9 +85,9 @@ The service answers one path, `POST /github` — the path the configuration name
 - **Payload URL** — `https://<hostname>/github`
 - **Content type** — `application/json`. A `form` webhook sends `payload=<urlencoded>`, which the JSON decode refuses; the signature verifies either way, so the tell is the content type.
 - **Secret** — the value in `DISPATCH_WEBHOOK_SECRET`
-- **Events** — pull requests, pull request reviews and issues
+- **Events** — pull requests, pull request reviews, issues, issue comments and workflow runs
 
-A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run. A pull request stops waking anyone once ten reviews have requested changes. A verified `issues` delivery whose action is `assigned` starts the run of the login in its `assignee`; the assignment adds no round. A verified `pull_request` delivery whose action is `assigned` does the same for the pull request's `assignee`, under the same rules and with its own reason. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
+A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run; one whose action is `ready_for_review` starts the run of every configured reviewer still requested on the pull request, a team not being resolved. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run, and so does one that approves a pull request that is open, not a draft and not armed; an approval that lands the change wakes nobody. A pull request stops waking anyone once ten reviews have requested changes, and an approval spends no round. A verified `issues` delivery whose action is `assigned` starts the run of the login in its `assignee`; a `pull_request` delivery with the same action does the same for the pull request's `assignee`, and neither adds a round. A verified `issue_comment` delivery whose action is `created` starts the run of each configured login the comment names exactly, when the comment's author is the owner, a member or a collaborator. A verified `workflow_run` delivery whose run completes as `failure` on a pull request starts the run of the account that triggered it, at most five times per pull request. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
 
 ## Checks
 
@@ -102,3 +102,4 @@ These three are the gate; CI runs them on every pull request and on `main`. What
 ## Documentation
 
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — what the service is for, who it is for, and how it is judged
+- [`docs/SYSTEMS.md`](docs/SYSTEMS.md) — where it runs, how a delivery becomes a run, and what is checked

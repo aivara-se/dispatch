@@ -109,3 +109,5 @@ v1.5 is done when each of these holds, and each is checkable by the operator.
 Decided and not yet built. Each version widens the set of deliveries the service acts on; a line moves into the changelog when its code lands.
 
 - **v1.6** — an exact `@login` in a comment from a member wakes that agent, on an issue or a pull request ([`011`](adrs/011-a-mention-wakes-the-agent-it-names.md)).
+- **v1.7** — an approval on a pull request that is not armed wakes its author, because the approval is the merge and an unarmed change lands nothing ([`012`](adrs/012-an-approval-that-lands-nothing-wakes-the-author.md)).
+- **v1.8** — a draft marked ready wakes the reviewers it requests, because that is the moment a probe becomes a candidate ([`013`](adrs/013-a-draft-marked-ready-wakes-its-reviewers.md)).

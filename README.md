@@ -1,6 +1,6 @@
 # Dispatch
 
-A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, or the author whose review requests changes. It does not do the work: a wake says *why now*, and the agent re-reads the pull request and acts. v1.1 carries one flow, the review and update loop, and touches no board.
+A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, or the author whose review requests changes. It does not do the work: a wake says *why now*, and the agent re-reads the pull request and acts. v1.2 carries one flow, the review and update loop, capped at ten rounds, and touches no board.
 
 ## Configuration
 
@@ -87,7 +87,7 @@ The service answers one path, `POST /github` — the path the configuration name
 - **Secret** — the value in `DISPATCH_WEBHOOK_SECRET`
 - **Events** — pull requests and pull request reviews
 
-A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
+A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run. A pull request stops waking anyone once ten reviews have requested changes. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
 
 ## Checks
 

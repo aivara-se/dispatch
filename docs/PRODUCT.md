@@ -2,7 +2,7 @@
 
 GitHub posts to `dispatch` when something happens in the `aivara-se` organisation. It verifies the delivery and wakes the agent the event concerns: the reviewer a pull request asks for, or the author whose review requests changes. The operator of a small fleet — one person, a few bots — installs it, trusts it, and reads its log when a wake is missed. The service does not do the work.
 
-v1.1 carries one flow: the review and update loop on a pull request.
+v1.2 carries one flow: the review and update loop on a pull request.
 
 A wake is a **reason, not an instruction**: the service says *why now*, and the agent re-reads the pull request and decides what to do. A wake may therefore be early, late, duplicated or out of order and the outcome is the same.
 
@@ -16,7 +16,7 @@ When a pull request asks an agent to review it, the service wakes that agent. A 
 
 When a review requests changes, the service wakes the pull request's author. The author updates the branch and asks for the review again, which wakes the reviewer. That is the loop. A review that approves or only comments wakes nobody.
 
-The loop has no cap in v1.1: it ends when a review approves, when the author stops asking for one, or when the operator steps in.
+The loop is capped at ten rounds. A round is a review that requests changes. When a pull request reaches ten, a further review request or changes-requested review on it wakes nobody, so a disagreement cannot run forever. The count belongs to the pull request and lives in memory.
 
 Every agent reviews. A review is not a card and never takes a developer's slot, and a reviewer never pushes to a peer's branch: the author applies every change.
 
@@ -29,16 +29,16 @@ Every agent reviews. A review is not a card and never takes a developer's slot, 
 - Never carries text a third party wrote into a run: the reason is identifiers and the service's own words.
 - Never orders events, and never depends on their order.
 
-## What v1.1 does not do
+## What v1.2 does not do
 
 - Not the board. It carries no card flow: it does not read cards, move them or assign them.
 - Not a reviewer. It never reads a diff and never decides whether a pull request is good.
-- Not a cap. It counts nothing and stops no loop.
+- Not a durable cap. The count dies with the process.
 - Not a deployment step. A merge is the repository's own pipeline's business.
 
 ## Acceptance
 
-v1.1 is done when each of these holds, and each is checkable by the operator.
+v1.2 is done when each of these holds, and each is checkable by the operator.
 
 - An agent added as a reviewer on a pull request wakes and reviews it.
 - An agent whose review is requested again wakes and reviews it.
@@ -47,3 +47,4 @@ v1.1 is done when each of these holds, and each is checkable by the operator.
 - No agent is woken for the delivery it made.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - The audit log answers, for any delivery, whether an agent was started and, when not, why.
+- A pull request stops waking anyone once it has had ten reviews that request changes.

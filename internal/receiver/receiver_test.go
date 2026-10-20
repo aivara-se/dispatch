@@ -370,6 +370,42 @@ func TestOnlyChangesRequestedCountsRounds(t *testing.T) {
 	}
 }
 
+// TestReviewRequestsAddNoRounds pins that a review request leaves the round
+// count alone: nine of them between a changes requested and the tenth must not
+// bring the cap forward.
+func TestReviewRequestsAddNoRounds(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+	request := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
+
+	if w := post(rc, "pull_request_review", "round1", round, sign(round)); w.Code != http.StatusAccepted {
+		t.Fatalf("first round: status = %d, want 202", w.Code)
+	}
+	for i := 1; i <= MaxRounds-1; i++ {
+		if w := post(rc, "pull_request", fmt.Sprintf("request%d", i), request, sign(request)); w.Code != http.StatusAccepted {
+			t.Fatalf("review request %d: status = %d, want 202", i, w.Code)
+		}
+		if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
+			t.Fatalf("review request %d: decision = %q, want started", i, got)
+		}
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d before the tenth round", len(runner.calls), MaxRounds)
+	}
+
+	// The tenth round still wakes: the review requests spent no count.
+	if w := post(rc, "pull_request_review", "round10", round, sign(round)); w.Code != http.StatusAccepted {
+		t.Fatalf("tenth round: status = %d, want 202", w.Code)
+	}
+	if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
+		t.Fatalf("tenth round decision = %q, want started", got)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+}
+
 // TestCapIsPerRepositoryAndNumber pins that the cap counts one pull request,
 // not one number: a repository's ten rounds leave another repository's pull
 // request of the same number free to wake.

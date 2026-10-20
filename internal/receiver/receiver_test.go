@@ -182,9 +182,21 @@ func commentBody(number int, action, association, sender, text string) string {
 	}`, action, testRepo, number, text, association, sender)
 }
 
-func approvalBody(state string, draft bool, autoMerge, sender, author string) string {
+// reviewDelivery is a pull_request_review delivery on pull request 105 whose
+// action and review state the caller varies.
+type reviewDelivery struct {
+	action    string
+	review    string
+	state     string
+	draft     bool
+	autoMerge string
+	sender    string
+	author    string
+}
+
+func (d reviewDelivery) body() string {
 	return fmt.Sprintf(`{
-		"action": "submitted",
+		"action": %q,
 		"repository": {"full_name": %q},
 		"pull_request": {
 			"number": 105,
@@ -193,9 +205,14 @@ func approvalBody(state string, draft bool, autoMerge, sender, author string) st
 			"auto_merge": %s,
 			"user": {"login": %q}
 		},
-		"review": {"state": "approved"},
+		"review": {"state": %q},
 		"sender": {"login": %q}
-	}`, testRepo, state, draft, autoMerge, author, sender)
+	}`, d.action, testRepo, d.state, d.draft, d.autoMerge, d.author, d.review, d.sender)
+}
+
+// approvalBody is a submitted approval on pull request 105.
+func approvalBody(state string, draft bool, autoMerge, sender, author string) string {
+	return reviewDelivery{"submitted", "approved", state, draft, autoMerge, sender, author}.body()
 }
 
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
@@ -803,9 +820,44 @@ func TestUnarmedApprovalWakesAuthor(t *testing.T) {
 	}
 }
 
+// TestUnarmedApprovalIgnoresTheReviewCap pins that an approval consults neither
+// counter: ten changes-requested rounds leave the cap reached, and an unarmed
+// approval on that number still starts a run.
+func TestUnarmedApprovalIgnoresTheReviewCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if w := post(rc, "pull_request_review", "capped", round, sign(round)); w.Code != http.StatusAccepted {
+		t.Fatalf("capped round: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d: the cap was not reached", len(runner.calls), MaxRounds)
+	}
+
+	body := approvalBody("open", false, "null", "thani-sh-meme", "thani-sh-mama")
+	if w := post(rc, "pull_request_review", "approval", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("approval: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+	want := call{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105"}
+	if got := runner.calls[len(runner.calls)-1]; got != want {
+		t.Fatalf("approval call = %+v, want %+v", got, want)
+	}
+}
+
 func TestApprovalWakesNobody(t *testing.T) {
 	cases := []struct {
 		name      string
+		action    string
+		review    string
 		state     string
 		draft     bool
 		autoMerge string
@@ -813,19 +865,21 @@ func TestApprovalWakesNobody(t *testing.T) {
 		author    string
 		why       string
 	}{
-		{"armed", "open", false, `{"merge_method": "squash"}`, "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"draft", "open", true, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"closed", "closed", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"merged", "merged", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"unconfigured author", "open", false, "null", "thani-sh-meme", "thani-sh-missing", "not a configured agent"},
-		{"actor is the author", "open", false, "null", "thani-sh-meme", "thani-sh-meme", "actor"},
+		{"armed", "submitted", "approved", "open", false, `{"merge_method": "squash"}`, "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"draft", "submitted", "approved", "open", true, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"closed", "submitted", "approved", "closed", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"merged", "submitted", "approved", "merged", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"commented review", "submitted", "commented", "open", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"edited approval", "edited", "approved", "open", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"unconfigured author", "submitted", "approved", "open", false, "null", "thani-sh-meme", "thani-sh-missing", "not a configured agent"},
+		{"actor is the author", "submitted", "approved", "open", false, "null", "thani-sh-meme", "thani-sh-meme", "actor"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
-			body := approvalBody(tc.state, tc.draft, tc.autoMerge, tc.sender, tc.author)
+			body := reviewDelivery{tc.action, tc.review, tc.state, tc.draft, tc.autoMerge, tc.sender, tc.author}.body()
 
 			if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)

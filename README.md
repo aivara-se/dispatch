@@ -1,6 +1,6 @@
 # Dispatch
 
-A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, the author whose review requests changes, or the agent an issue is assigned to. It does not do the work: a wake says *why now*, and the agent re-reads the pull request or the issue and acts. v1.3 carries two flows: the review and update loop, capped at ten rounds, and an issue's assignment. It touches no board.
+A service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent an event concerns: the reviewer a pull request asks for, the author whose review requests changes, or the agent an assignment names. It does not do the work: a wake says *why now*, and the agent re-reads the pull request or the issue and acts. v1.4 carries two flows: the review and update loop, capped at ten rounds, and an assignment, on an issue or on a pull request. It touches no board.
 
 ## Configuration
 
@@ -87,7 +87,7 @@ The service answers one path, `POST /github` — the path the configuration name
 - **Secret** — the value in `DISPATCH_WEBHOOK_SECRET`
 - **Events** — pull requests, pull request reviews and issues
 
-A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run. A pull request stops waking anyone once ten reviews have requested changes. A verified `issues` delivery whose action is `assigned` starts the run of the login in its `assignee`; the assignment adds no round. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
+A verified `pull_request` delivery whose action is `review_requested` starts the named reviewer's run. A verified `pull_request_review` delivery whose review requests changes starts the pull request author's run. A pull request stops waking anyone once ten reviews have requested changes. A verified `issues` delivery whose action is `assigned` starts the run of the login in its `assignee`; the assignment adds no round. A verified `pull_request` delivery whose action is `assigned` does the same for the pull request's `assignee`, under the same rules and with its own reason. Every other delivery, and a redelivery, is answered and wakes nobody, which the audit record shows.
 
 ## Checks
 

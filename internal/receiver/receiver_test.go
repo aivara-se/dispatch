@@ -215,6 +215,19 @@ func approvalBody(state string, draft bool, autoMerge, sender, author string) st
 	return reviewDelivery{"submitted", "approved", state, draft, autoMerge, sender, author}.body()
 }
 
+func readyBody(sender string, reviewers ...string) string {
+	entries := make([]string, len(reviewers))
+	for i, login := range reviewers {
+		entries[i] = fmt.Sprintf(`{"login": %q}`, login)
+	}
+	return fmt.Sprintf(`{
+		"action": "ready_for_review",
+		"repository": {"full_name": %q},
+		"pull_request": {"number": 105, "requested_reviewers": [%s]},
+		"sender": {"login": %q}
+	}`, testRepo, strings.Join(entries, ","), sender)
+}
+
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
 	// The body is not JSON: a 400 here would mean it had been parsed.
 	const body = `{"action":`
@@ -927,6 +940,105 @@ func TestApprovalWakesNobody(t *testing.T) {
 	}
 }
 
+func TestReadyForReviewWakesReviewers(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := readyBody("thani-sh", "thani-sh-meme", "thani-sh-mama")
+
+	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := []call{
+		{profile: "mama", reason: "Dispatch: ready for review on aivara-se/dispatch#105"},
+		{profile: "meme", reason: "Dispatch: ready for review on aivara-se/dispatch#105"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	for i := range want {
+		if runner.calls[i] != want[i] {
+			t.Fatalf("calls[%d] = %+v, want %+v", i, runner.calls[i], want[i])
+		}
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Profile != "mama,meme" || got.Number != 105 {
+		t.Fatalf("record = %+v, want started on 105 by mama,meme", got)
+	}
+}
+
+func TestReadyForReviewWakesNobody(t *testing.T) {
+	teams := `{
+		"action": "ready_for_review",
+		"repository": {"full_name": "aivara-se/dispatch"},
+		"pull_request": {"number": 105, "requested_reviewers": [], "requested_teams": [{"slug": "reviewers"}]},
+		"sender": {"login": "thani-sh"}
+	}`
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"no reviewers", readyBody("thani-sh")},
+		{"unconfigured reviewer", readyBody("thani-sh", "thani-sh-missing")},
+		{"actor only", readyBody("thani-sh-meme", "thani-sh-meme")},
+		{"team only", teams},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+
+			if w := post(rc, "pull_request", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, "no configured reviewer") {
+				t.Fatalf("record = %+v, want ignored for no reviewer", got)
+			}
+		})
+	}
+}
+
+func TestReadyForReviewSkipsItsActorAndRepeats(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	body := readyBody("thani-sh-meme", "thani-sh-meme", "thani-sh-meme", "thani-sh-mama")
+
+	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].profile != "mama" {
+		t.Fatalf("calls = %+v, want one run for mama", runner.calls)
+	}
+}
+
+// TestReadyForReviewIgnoresTheReviewCap pins that a draft marked ready has no
+// count: a pull request at ten rounds still wakes its reviewers.
+func TestReadyForReviewIgnoresTheReviewCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	body := readyBody("thani-sh", "thani-sh-meme")
+	if w := post(rc, "pull_request", "ready", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("ready: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+	if got := runner.calls[len(runner.calls)-1].profile; got != "meme" {
+		t.Fatalf("ready profile = %q, want meme", got)
+	}
+}
+
 func TestIssueDeliveryWakesNobody(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1359,6 +1471,19 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"sender": {"login": "thani-sh-meme"}
 	}`, sentinel, sentinel, sentinel, sentinel, sentinel)
 
+	readyForReview := fmt.Sprintf(`{
+		"action": "ready_for_review",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"pull_request": {
+			"number": 105,
+			"title": %q,
+			"body": %q,
+			"head": {"ref": %q},
+			"requested_reviewers": [{"login": "thani-sh-meme"}]
+		},
+		"sender": {"login": "thani-sh"}
+	}`, sentinel, sentinel, sentinel, sentinel)
+
 	cases := []struct {
 		name    string
 		event   string
@@ -1393,6 +1518,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"approved but not armed", "pull_request_review", unarmedApproval, "mama",
 			"Dispatch: approved but not armed on aivara-se/dispatch#105",
+		},
+		{
+			"ready for review", "pull_request", readyForReview, "meme",
+			"Dispatch: ready for review on aivara-se/dispatch#105",
 		},
 	}
 

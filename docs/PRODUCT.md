@@ -18,11 +18,11 @@ When a review requests changes, the service wakes the pull request's author. The
 
 Every agent reviews. A review is not a card and never takes a developer's slot, and a reviewer never pushes to a peer's branch: the author applies every change.
 
-### The cap: five reviews
+### The cap: five rounds
 
-The service counts the reviews submitted on a pull request that is not blocked. From the fifth review on, no wake is started for that pull request: the service adds the `blocked` label instead and the loop ends there.
+A review that requests changes is a round of the loop, and the service counts a pull request's rounds. From the fifth round on, no wake is started for that pull request: the service adds the `blocked` label instead and the loop ends there.
 
-A pull request carrying `blocked` wakes nobody, for a review request or a review. The operator removes the label to resume it, and the removal gives the loop five more reviews. The label is `blocked` in every repository and the service does not create it: it is added by name, so each repository that uses the flow carries it.
+A pull request carrying `blocked` wakes nobody, for a review request or a review. The operator removes the label to resume it, and the removal gives the loop five more rounds. The label is `blocked` in every repository and the service does not create it: it is added by name, so each repository that uses the flow carries it.
 
 ## What it never does
 
@@ -48,7 +48,7 @@ v1.1 is done when each of these holds, and each is checkable by the operator.
 - An agent whose review is requested again wakes and reviews it.
 - A review that requests changes wakes the pull request's author, and only the author.
 - A review that approves or only comments wakes nobody.
-- From the fifth review on, no wake is started for a pull request: the delivery adds `blocked` and wakes nobody.
+- From the fifth round of changes requested, no wake is started for a pull request: the delivery adds `blocked` and wakes nobody.
 - A pull request carrying `blocked` wakes nobody.
 - No agent is woken for the delivery it made.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.

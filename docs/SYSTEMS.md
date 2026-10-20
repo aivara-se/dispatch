@@ -14,16 +14,16 @@ The unit, the environment file and the proxy site are `README.md` (*Run it on th
 4. Two deliveries act: a `pull_request` delivery whose action is `review_requested`, which wakes the requested reviewer; and a `pull_request_review` delivery whose action is `submitted` and whose review state is `changes_requested`, which wakes the author. Every other event, action or review state is accepted and ignored.
 5. The delivery id is checked against the in-memory cache. A delivery already seen is accepted and starts nothing.
 6. The pull request's labels are read. One carrying `blocked` ends the decision: nobody is woken, nothing is counted, and the line says why ([`006`](adrs/006-the-review-loop-and-its-cap.md)).
-7. A review delivery increments its pull request's count, whatever the review's state.
+7. A review delivery that requests changes increments its pull request's round count.
 8. The login to wake is matched against the configured agents — the requested reviewer, or the pull request's author. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken.
-9. A wake at the cap is refused: from the fifth review on, the label is written instead of a run, and nobody is woken.
-10. One audit line is appended whatever happened ([`005`](adrs/005-the-audit-record.md)).
+9. A wake at the cap is refused: from the fifth round on, the label is written instead of a run, and nobody is woken.
+10. One audit line is appended whatever happened ([`005`](adrs/005-the-audit-record.md), [`007`](adrs/007-the-label-on-the-audit-record.md)).
 
 The answers are the service's own: `401` a missing or non-verifying signature, `400` a body it will not read, `202` every delivery that verifies — acted on or ignored. The audit line, not the status, tells those two apart.
 
 ## Starting a run
 
-The requirement is that a review request is never delayed. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>"`, launched by the service and not tracked ([`003`](adrs/003-starting-a-run.md)).
+The requirement is that a review request is neither queued nor held back: nothing waits on a run already in flight. The one thing between a delivery and its run is the bounded label read ([`006`](adrs/006-the-review-loop-and-its-cap.md)). The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>"`, launched by the service and not tracked ([`003`](adrs/003-starting-a-run.md)).
 
 - **No serialisation.** Every wake starts a run; nothing queues and nothing is held back, so an agent may have several runs at once.
 - **No tracking.** The child is reaped so it does not linger; no run table, no exit bookkeeping, no lifetime bound, nothing reconciled at boot.
@@ -34,9 +34,9 @@ The argv is a contract with another program — `--profile`/`-p` and `chat -q` a
 
 ## The review count and the label
 
-The count is per pull request and in memory: one number, incremented on every review delivery that is not a duplicate and arrives on a pull request that is not blocked, whatever the review's state.
+The count is per pull request and in memory: one per round — a review that requests changes — incremented on every round that is not a duplicate and is not on a blocked pull request. A comment or an approval is not a round and does not move the count.
 
-- **The cap is five.** From the fifth review on, a delivery that would wake someone does not: the service adds `blocked`, wakes nobody, and clears the count when the write succeeds. Removing the label therefore gives the loop five more reviews, and the service needs no event to notice the removal.
+- **The cap is five.** From the fifth round on, a delivery that would wake someone does not: the service adds `blocked`, wakes nobody, and clears the count when the write succeeds. Removing the label therefore gives the loop five more rounds, and the service needs no event to notice the removal.
 - **The label is the durable guard.** Before any wake, the service reads the pull request's labels; `blocked` among them ends the decision, and a blocked pull request is not counted. That is what makes the block outlast a restart and cover a pull request the operator blocked by hand.
 - **The read is bounded and fails open.** A read that fails or times out is recorded on the line and the wake goes ahead: a repeated wake costs a run, a withheld review costs the loop.
 - **The write is not retried in place.** A failure is recorded, nobody is woken, and the next review on that pull request tries again.
@@ -75,7 +75,7 @@ The service holds one GitHub token for the two calls its one write costs: read t
 - **A label read that fails** — the wake is not withheld; the line records the failed check and the run starts.
 - **A label write that fails** — recorded on the delivery's line, nobody is woken, and the next review tries again.
 - **A run that cannot start** — recorded on the delivery's line, answered `202`, not retried.
-- **A crash or a restart** — out of scope: the cache and the count are not reconciled. A delivery redelivered inside the lost hour can start one extra run, and an unlabelled loop gets a fresh five reviews. A labelled pull request stays blocked.
+- **A crash or a restart** — out of scope: the cache and the count are not reconciled. A delivery redelivered inside the lost hour can start one extra run, and an unlabelled loop gets a fresh five rounds. A labelled pull request stays blocked.
 
 ## Checks
 

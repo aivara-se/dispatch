@@ -94,23 +94,31 @@ func post(rc *Receiver, event, delivery, body string, signature string) *httptes
 }
 
 func reviewBody(action, sender, reviewer string) string {
+	return reviewBodyOn(105, action, sender, reviewer)
+}
+
+func reviewBodyOn(number int, action, sender, reviewer string) string {
 	return fmt.Sprintf(`{
 		"action": %q,
 		"repository": {"full_name": "aivara-se/dispatch"},
-		"pull_request": {"number": 105},
+		"pull_request": {"number": %d},
 		"requested_reviewer": {"login": %q},
 		"sender": {"login": %q}
-	}`, action, reviewer, sender)
+	}`, action, number, reviewer, sender)
 }
 
 func changesBody(action, state, sender, author string) string {
+	return changesBodyOn(105, action, state, sender, author)
+}
+
+func changesBodyOn(number int, action, state, sender, author string) string {
 	return fmt.Sprintf(`{
 		"action": %q,
 		"repository": {"full_name": "aivara-se/dispatch"},
-		"pull_request": {"number": 105, "user": {"login": %q}},
+		"pull_request": {"number": %d, "user": {"login": %q}},
 		"review": {"state": %q},
 		"sender": {"login": %q}
-	}`, action, author, state, sender)
+	}`, action, number, author, state, sender)
 }
 
 func TestSignatureRefusedBeforeParsing(t *testing.T) {
@@ -278,6 +286,100 @@ func TestChangesRequestedWakesAuthor(t *testing.T) {
 	}
 	if recorder.records[0].Decision != audit.Started {
 		t.Fatalf("decision = %q, want started", recorder.records[0].Decision)
+	}
+}
+
+func TestCapStopsWakingAfterTenRounds(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds)
+	}
+
+	// The eleventh round, and a review request on the capped pull request.
+	capped := []struct {
+		name  string
+		event string
+		body  string
+	}{
+		{"changes requested", "pull_request_review", body},
+		{"review requested", "pull_request", reviewBody("review_requested", "thani-sh", "thani-sh-meme")},
+	}
+	for i, tc := range capped {
+		if w := post(rc, tc.event, fmt.Sprintf("capped%d", i), tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			t.Fatalf("%s: status = %d, want 202", tc.name, w.Code)
+		}
+		last := recorder.records[len(recorder.records)-1]
+		if last.Decision != audit.Ignored || !strings.Contains(last.Why, "cap") {
+			t.Fatalf("%s: record = %+v, want ignored for the cap", tc.name, last)
+		}
+		if last.Profile != "" {
+			t.Fatalf("%s: record names a profile: %+v", tc.name, last)
+		}
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d after the cap", len(runner.calls), MaxRounds)
+	}
+}
+
+func TestOnlyChangesRequestedCountsRounds(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+
+	for i := 1; i <= MaxRounds-1; i++ {
+		body := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+
+	// An approval and a comment add no round, even at the ninth.
+	for i, state := range []string{"approved", "commented"} {
+		body := changesBody("submitted", state, "thani-sh-meme", "thani-sh-mama")
+		if w := post(rc, "pull_request_review", fmt.Sprintf("other%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("%s: status = %d, want 202", state, w.Code)
+		}
+	}
+
+	tenth := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+	if w := post(rc, "pull_request_review", "d10", tenth, sign(tenth)); w.Code != http.StatusAccepted {
+		t.Fatalf("tenth round: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds)
+	}
+	if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
+		t.Fatalf("tenth round decision = %q, want started", got)
+	}
+}
+
+func TestCapIsPerPullRequest(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	capped := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), capped, sign(capped)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+
+	other := reviewBodyOn(106, "review_requested", "thani-sh", "thani-sh-meme")
+	if w := post(rc, "pull_request", "other", other, sign(other)); w.Code != http.StatusAccepted {
+		t.Fatalf("other pull request: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+	if got := runner.calls[len(runner.calls)-1].profile; got != "meme" {
+		t.Fatalf("last run profile = %q, want meme", got)
 	}
 }
 

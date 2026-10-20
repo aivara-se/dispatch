@@ -23,6 +23,10 @@ const MaxBody = 1 << 20
 // DedupTTL is how long a delivery id is remembered.
 const DedupTTL = time.Hour
 
+// MaxRounds is the number of reviews that request changes after which a pull
+// request wakes nobody.
+const MaxRounds = 10
+
 // Runner starts a profile's run.
 type Runner interface {
 	Start(profile, reason string) error
@@ -40,6 +44,7 @@ type Receiver struct {
 	runner Runner
 	audit  Recorder
 	seen   *seen
+	rounds *rounds
 }
 
 // New returns a Receiver for the given secret and configured login-to-profile
@@ -51,6 +56,7 @@ func New(secret []byte, agents map[string]string, runner Runner, recorder Record
 		runner: runner,
 		audit:  recorder,
 		seen:   newSeen(DedupTTL, time.Now),
+		rounds: newRounds(),
 	}
 }
 
@@ -144,6 +150,15 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rc.seen.add(rec.Delivery)
 
+	if rc.rounds.reached(rec.Repository, rec.Number) {
+		rec.Decision = audit.Ignored
+		rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
+		return
+	}
+	if changes {
+		rc.rounds.add(rec.Repository, rec.Number)
+	}
+
 	login := p.PullRequest.User.Login
 	reason := fmt.Sprintf("Dispatch: changes requested on %s#%d", rec.Repository, rec.Number)
 	if review {
@@ -175,6 +190,38 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		return
 	}
 	rec.Decision = audit.Started
+}
+
+// rounds counts the reviews that requested changes, per pull request.
+type rounds struct {
+	mu    sync.Mutex
+	count map[prKey]int
+}
+
+type prKey struct {
+	repository string
+	number     int
+}
+
+func newRounds() *rounds {
+	return &rounds{count: make(map[prKey]int)}
+}
+
+// reached reports whether the pull request has had the cap's rounds.
+func (r *rounds) reached(repository string, number int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.count[prKey{repository, number}] >= MaxRounds
+}
+
+// add records one round for the pull request.
+func (r *rounds) add(repository string, number int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := prKey{repository, number}
+	if r.count[key] < MaxRounds {
+		r.count[key]++
+	}
 }
 
 // seen is the in-memory delivery-id cache.

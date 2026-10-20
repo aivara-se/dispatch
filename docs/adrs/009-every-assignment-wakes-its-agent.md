@@ -2,26 +2,29 @@
 
 ## Context
 
-[008](008-issue-assignment.md) acts on one delivery: `issues` with action `assigned`. Two assignment-shaped cases still wake nobody, and both are listed as deliberately unhandled in [PRODUCT](../PRODUCT.md) (*Edge cases v1.3 leaves unhandled*): an issue created with an assignee on it, whose delivery is `opened`, and a pull request assigned, which arrives as `pull_request` with action `assigned` rather than as `issues`. The second is the odder of the two, because the gesture is the same one — hand an agent a piece of work by assigning it — and it wakes the agent on an issue and not on a pull request.
+[008](008-issue-assignment.md) acts on `issues` with action `assigned`. [PRODUCT](../PRODUCT.md) (*Edge cases v1.3 leaves unhandled*) lists two assignment-shaped gestures it does not reach: an issue created with an assignee already on it, and a pull request assigned.
 
-GitHub documents the `assignees` array on an issue and the `assignee` object on both events (`Webhook events and payloads`, docs.github.com, read 2026-10-20).
+The first turns out not to need reaching. GitHub delivers `assigned` for the assignment that creation performs, after `opened`. A repository webhook subscribed to `issues` and `pull_request` was given an issue created with an assignee and a pull request created with an assignee; it recorded `issues` `opened` then `issues` `assigned`, and `pull_request` `opened` then `pull_request` `assigned` (observed 2026-10-20). The `opened` delivery is not the assignment, and acting on it would wake the agent for work the `assigned` delivery is about to announce anyway.
+
+The second is real: assigning a pull request delivers `pull_request` with action `assigned`, which no record acts on. The same gesture wakes an agent on an issue and not on a pull request.
 
 ## Decision
 
-- **`issues` with action `opened` acts when the issue carries assignees.** Every configured login in `issue.assignees` is woken, and the delivery's actor is not.
-- **`pull_request` with action `assigned` acts**, waking `assignee.login`, the same field `issues`/`assigned` reads. A pull request does not deliver on the `issues` event, so it needs its own branch.
-- **Every other action stays ignored**: `edited`, `labeled`, `unassigned`, `closed`, `reopened`, and a pull request's `opened`.
-- **008's rules still govern the wake.** The login is matched against the configured agents, the actor is never woken, the reason is identifiers and the service's own words, and there is no count, no API call, no credential and no new state.
-- **The fixed sentences grow by one.** `Dispatch: issue assigned on <repository>#<number>` covers an issue that arrives assigned as well as one assigned later, and `Dispatch: pull request assigned on <repository>#<number>` covers the pull request, so a reason says which of the two it points at.
-- **No new subscription.** The organisation webhook already carries `issues` and `pull_request`.
+- **One delivery more acts: `pull_request` with action `assigned`**, waking `assignee.login` — the field `issues`/`assigned` already reads. A pull request does not deliver on the `issues` event, so it needs its own branch.
+- **`issues` with action `opened` stays ignored**, because the assignment it carries arrives as its own `assigned` delivery. Acting on both would wake the agent twice for one gesture.
+- **Every other action stays ignored**: `edited`, `labeled`, `unassigned`, `closed`, `reopened`, and a pull request's other actions.
+- **008's rules govern the wake**: the roster match, the actor exclusion, the identifiers-only reason, and no count, no API call, no credential and no new state.
+- **The reason gains one sentence**: `Dispatch: pull request assigned on <repository>#<number>`, so a reason says which kind it points at. `Dispatch: issue assigned on <repository>#<number>` is unchanged and covers an issue created with its assignee, because that arrives as `assigned`.
+- **No new subscription**: the organisation webhook already carries `pull_request`.
 
 ## What this overrides
 
-[008](008-issue-assignment.md)'s "Every other `issues` action — `opened`, `edited`, `unassigned`, `labeled`, `closed` and the rest — is accepted and ignored" no longer holds: `opened` acts when the issue carries assignees. So does its "The payload's `assignees` array is not read", which was true of `assigned` alone. Everything else in `008` stands — the roster match, the actor rule, the reason's shape, and the absence of count, API and state — and so does `002`'s "the service calls no API".
+[002](002-github-webhook-ingestion.md)'s "one event acts" is widened by one delivery, as `006`, `008` and `010` widen it. Nothing else falls: `008`'s "Every other `issues` action — `opened`, `edited`, `unassigned`, `labeled`, `closed` and the rest — is accepted and ignored" still holds, `opened` among them, and so do its actor rule, its roster match and its consequence that the flow adds no state.
 
 ## Consequences
 
-- **An issue created with an assignee can wake the agent twice.** If GitHub delivers both `opened` — which carries the assignees — and `assigned` for the same act, the two deliveries have different ids and the dedup cache cannot see them as one; the agent runs twice over the same issue. That is the trade the service already makes for two review requests on one pull request — a wake is a reason, and a duplicate is harmless — and it is not repaired here.
-- **Anyone who can assign can start a run**, at creation as well as after it. Assigning takes triage permission or above, so that was already true of `assigned`; `opened` widens it by one gesture and no further.
-- **One wake per assignee.** A card handed to two agents starts two runs, one each, and neither is held back.
-- **A pull request's assignment reads as a pull request in the reason**, so an agent that matches the wording is not told to look for an issue.
+- **An issue created with an assignee already wakes its agent**, and did before this record: the `assigned` delivery is the one that acts. The gesture's two deliveries are not a duplicate wake, and no code was needed to make them one.
+- **A pull request created with an assignee wakes its agent once**, by the same route: `opened` is ignored and `assigned` acts.
+- **Several assignees in one change remain unhandled**: only the payload's `assignee` is read, never its `assignees` array, and whether GitHub reports such a change as one delivery per assignee is unrecorded here.
+- **Anyone who can assign can start a run** — triage permission or above — for a pull request as well as for an issue.
+- **One wake per assignee**, and nothing is held back.

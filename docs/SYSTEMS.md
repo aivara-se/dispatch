@@ -10,11 +10,11 @@ The unit, the environment file and the proxy site are `README.md` (*Run it on th
 
 1. GitHub posts to the public URL; the proxy forwards to the loopback address and path the configuration names ([`004`](adrs/004-configuration.md)).
 2. The receiver reads the raw body up to 1 MiB, then verifies `X-Hub-Signature-256` against the configured secret. Nothing is parsed before it verifies ([`002`](adrs/002-github-webhook-ingestion.md)).
-3. It takes the event and the delivery id from the headers, and the action, the repository, the pull request and — per event — the requested reviewer, the review state and the author from the body.
-4. Two deliveries act: a `pull_request` delivery whose action is `review_requested`, which wakes the requested reviewer; and a `pull_request_review` delivery whose action is `submitted` and whose review state is `changes_requested`, which wakes the author ([`006`](adrs/006-the-review-loop.md)). Every other event, action or review state is accepted and ignored.
+3. It takes the event and the delivery id from the headers, and the action, the repository and — per event — the pull request, the requested reviewer, the review state and the author, or the issue and its assignee, from the body.
+4. Three deliveries act: a `pull_request` delivery whose action is `review_requested`, which wakes the requested reviewer; a `pull_request_review` delivery whose action is `submitted` and whose review state is `changes_requested`, which wakes the author ([`006`](adrs/006-the-review-loop.md)); and an `issues` delivery whose action is `assigned`, which wakes the assignee ([`008`](adrs/008-issue-assignment.md)). Every other event, action or review state is accepted and ignored.
 5. The delivery id is checked against the in-memory cache. A delivery already seen is accepted and starts nothing.
-6. The pull request's round count decides whether the delivery may act: at ten it wakes nobody, and below ten a `changes_requested` review adds one. The count is per pull request and in memory ([`007`](adrs/007-the-review-cap.md)).
-7. The login to wake is matched against the configured agents — the requested reviewer, or the pull request's author. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken.
+6. For a pull request, the round count decides whether the delivery may act: at ten it wakes nobody, and below ten a `changes_requested` review adds one. The count is per pull request and in memory ([`007`](adrs/007-the-review-cap.md)). An assignment keeps no count.
+7. The login to wake is matched against the configured agents — the requested reviewer, the pull request's author, or the issue's assignee. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken.
 8. The matched profile's agent is started, with the reason ([`003`](adrs/003-starting-a-run.md)).
 9. One audit line is appended whatever happened ([`005`](adrs/005-the-audit-record.md)).
 
@@ -33,18 +33,19 @@ The argv is a contract with another program — `--profile`/`-p` and `chat -q` a
 
 ## The reason
 
-A wake's only input is the reason, and the reason is identifiers and the service's own words — never a title, a body, a branch or a comment ([`002`](adrs/002-github-webhook-ingestion.md)). The two fixed sentences are:
+A wake's only input is the reason, and the reason is identifiers and the service's own words — never a title, a body, a branch or a comment ([`002`](adrs/002-github-webhook-ingestion.md)). The three fixed sentences are:
 
 ```
 Dispatch: review requested on aivara-se/dispatch#105
 Dispatch: changes requested on aivara-se/dispatch#105
+Dispatch: issue assigned on aivara-se/dispatch#124
 ```
 
 The service's name tells the agent this is a wake and not the operator speaking; the repository and number are the pointer the agent re-reads; the phrase is the why-now. GitHub sends `review_requested` for both a reviewer added and a review requested again, so that sentence does not claim to tell them apart.
 
 ## GitHub access
 
-One organisation webhook, created by an owner of the organisation, subscribed to `pull_request` and `pull_request_review`, and set to content type `json` — a `form` webhook sends `payload=<urlencoded>`, which the JSON decode refuses. Its secret is the value the configuration names, held in the unit's environment and never in the tree.
+One organisation webhook, created by an owner of the organisation, subscribed to `pull_request`, `pull_request_review` and `issues`, and set to content type `json` — a `form` webhook sends `payload=<urlencoded>`, which the JSON decode refuses. Its secret is the value the configuration names, held in the unit's environment and never in the tree. The `issues` subscription is what v1.3's flow needs; a webhook without it receives no assignment at all.
 
 The service calls no GitHub API and holds no GitHub credential: the payload and the configuration answer the whole decision ([`002`](adrs/002-github-webhook-ingestion.md)). The agents act on GitHub with their own credentials, not the service's.
 
@@ -72,6 +73,6 @@ go vet ./...
 go test ./...
 ```
 
-The tests must cover: the signature refused before parsing, the event and review-state filter, the dedup, the ten-round cap and the wake it refuses, the configuration loader's refusals, and one signed POST per flow that starts a run. The reason tests use a fixture whose every text field is a sentinel — no sentinel reaches the argv — and the argv is a fixed sentence above. A fake `hermes` on the configured path captures the argv.
+The tests must cover: the signature refused before parsing, the event and review-state filter, the issue-assignee filter, the dedup, the ten-round cap and the wake it refuses, the configuration loader's refusals, and one signed POST per flow that starts a run. The reason tests use a fixture whose every text field is a sentinel — no sentinel reaches the argv — and the argv is a fixed sentence above. A fake `hermes` on the configured path captures the argv.
 
 What no test can reach: that Hermes still accepts the argv, and a real delivery through GitHub to a real agent run. Both are checked by hand on the host.

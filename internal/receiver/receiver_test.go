@@ -2249,7 +2249,7 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 
-			want := []string{"--profile", tc.profile, "chat", "-q", tc.reason}
+			want := []string{"--profile", tc.profile, "chat", "-q", tc.reason, "--source", "dispatch"}
 			if len(args) != len(want) {
 				t.Fatalf("argv = %q, want %q", args, want)
 			}
@@ -2265,8 +2265,8 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 			if len(recorder.records) != 1 {
 				t.Fatalf("audit records = %d, want 1", len(recorder.records))
 			}
-			if got := recorder.records[0].Reason; got != want[len(want)-1] {
-				t.Fatalf("recorded reason = %q, want %q", got, want[len(want)-1])
+			if got := recorder.records[0].Reason; got != tc.reason {
+				t.Fatalf("recorded reason = %q, want %q", got, tc.reason)
 			}
 		})
 	}

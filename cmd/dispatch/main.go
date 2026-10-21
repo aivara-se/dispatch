@@ -61,6 +61,9 @@ func serve(configPath string) error {
 	if err != nil {
 		return err
 	}
+	if err := record.Append(audit.BootRecord(cfg.Listen, len(cfg.Agents), time.Now())); err != nil {
+		return err
+	}
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(listener) }()

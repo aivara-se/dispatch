@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"sync"
+	"time"
 )
 
 // MaxSize is the size at which the audit file rotates.
@@ -36,6 +38,52 @@ type Record struct {
 	Why        string `json:"why,omitempty"`
 	Answer     int    `json:"answer,omitempty"`
 	Exit       int    `json:"exit,omitempty"`
+	Boot       *Boot  `json:"boot,omitempty"`
+}
+
+// Boot is the one line the service appends for itself when it starts: when,
+// the build it runs, where it listens, and how many agents it knows.
+type Boot struct {
+	At       string `json:"at"`
+	Revision string `json:"revision"`
+	Dirty    string `json:"dirty"`
+	Listen   string `json:"listen"`
+	Agents   int    `json:"agents"`
+}
+
+// Unknown is what a binary with no VCS metadata says about itself.
+const Unknown = "unknown"
+
+// BootRecord returns the service's line at startup, read from the binary's own
+// build info.
+func BootRecord(listen string, agents int, now time.Time) Record {
+	revision, dirty := buildInfo()
+	return Record{Boot: &Boot{
+		At:       now.UTC().Format(time.RFC3339),
+		Revision: revision,
+		Dirty:    dirty,
+		Listen:   listen,
+		Agents:   agents,
+	}}
+}
+
+// buildInfo returns the revision the binary was built from and whether its
+// tree was modified. A build with no VCS metadata says unknown for both.
+func buildInfo() (revision, dirty string) {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return Unknown, Unknown
+	}
+	revision, dirty = Unknown, Unknown
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value
+		}
+	}
+	return revision, dirty
 }
 
 // Log is the audit file, rotated once past its size bound.

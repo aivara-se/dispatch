@@ -86,13 +86,14 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 ## Planned, not built
 
-v1.9 to v1.13 are decided ([PRODUCT](PRODUCT.md), *Roadmap*) and not in the binary. Every list above describes v1.8; each of these is added to it by the code that lands it.
+v1.9 to v1.14 are decided ([PRODUCT](PRODUCT.md), *Roadmap*) and not in the binary. Every list above describes v1.8; each of these is added to it by the code that lands it.
 
 - **v1.9** — `workflow_run` completed, conclusion `failure`, event `push`, no pull request named and `head_branch` equal to `repository.default_branch`: wake the run's actor with `Dispatch: checks failed on <repository>@<branch>`, at most five times per repository and branch ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)).
 - **v1.10** — a child that exits non-zero appends one audit line carrying the delivery id, the profile and the exit status; a run that exits zero appends nothing ([`015`](adrs/015-the-audit-records-a-runs-exit.md)).
 - **v1.11** — the mention path also reads `pull_request_review` submitted and `pull_request_review_comment` created, under the same association guard and the same reason ([`016`](adrs/016-a-mention-reads-the-reviews-own-surfaces.md)).
 - **v1.12** — `pull_request_review` dismissed on an open, unmerged, non-draft pull request wakes `pull_request.user.login` with `Dispatch: approval dismissed on <repository>#<number>`; no count and no subscription change ([`017`](adrs/017-a-dismissed-review-wakes-the-author.md)).
 - **v1.13** — one audit line at boot with the build's revision, the listen address and the number of configured agents; no heartbeat and no shutdown line ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
+- **v1.14** — the run's argv gains `--source dispatch`, so its session is tagged with the service's name; no title, no session id and no pid are added ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).
 
 ## Checks
 

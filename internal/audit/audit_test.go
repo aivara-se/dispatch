@@ -6,7 +6,46 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestBootRecordIsOneLineOfItsOwn pins 018's boot line: the moment, the build,
+// the address and the agent count, and no delivery's field beside them.
+func TestBootRecordIsOneLineOfItsOwn(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	rec := BootRecord("127.0.0.1:8787", 3, now)
+
+	if rec.Boot == nil {
+		t.Fatalf("record = %+v, want a boot line", rec)
+	}
+	boot := rec.Boot
+	if boot.At != "2026-10-21T12:00:00Z" {
+		t.Fatalf("at = %q, want the moment in UTC", boot.At)
+	}
+	if boot.Listen != "127.0.0.1:8787" || boot.Agents != 3 {
+		t.Fatalf("boot = %+v, want the address and the agent count", boot)
+	}
+	if boot.Revision == "" {
+		t.Fatal("revision is empty")
+	}
+	switch boot.Dirty {
+	case "true", "false", Unknown:
+	default:
+		t.Fatalf("dirty = %q, want true, false or unknown", boot.Dirty)
+	}
+
+	line, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(line, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 1 || fields["boot"] == nil {
+		t.Fatalf("boot line = %s, want the boot object alone", line)
+	}
+}
 
 func TestAppendWritesOneLinePerRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")

@@ -95,6 +95,8 @@ v1.9 to v1.14 are decided ([PRODUCT](PRODUCT.md), *Roadmap*) and not in the bina
 - **v1.13** — one audit line at boot with the build's revision, the listen address and the number of configured agents; no heartbeat and no shutdown line ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
 - **v1.14** — the run's argv gains `--source dispatch`, so its session is tagged with the service's name; no title, no session id and no pid are added ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).
 
+**Observability, not a version** ([`020`](adrs/020-observability-is-opentelemetry-over-otlp.md)). With `OTEL_EXPORTER_OTLP_ENDPOINT` set in the unit's environment, the service exports one `dispatch.delivery` span per verified delivery and two instruments, `dispatch.deliveries` and `dispatch.delivery.duration`, over OTLP/HTTP; with it unset, it exports nothing and the delivery path is unchanged. It lands in `internal/telemetry/` with the tests that hold the no-op and a delivery answered `202` while the endpoint refuses. It adds no delivery, no audit line and no configuration field.
+
 ## Checks
 
 ```sh

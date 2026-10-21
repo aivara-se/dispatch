@@ -22,7 +22,7 @@ The payload answers it without an API call: `pull_request_review` with action `d
 
 ## Consequences
 
-- The author learns at the moment the change loses its approval, which after a rebase is the moment they still have the branch in hand — and it is the only notice: the push that caused it returns no error.
+- The author learns at the moment the change loses its review, which after a rebase is the moment they still have the branch in hand — and it is the only notice: the push that caused it returns no error.
 - **Every dismissal wakes the author, wherever it came from**: their own rebase, a maintainer clearing a stale review, or GitHub's staleness rule. The payload says neither which verdict was removed nor who removed it, so a dismissed *rejection* wakes the author too — a run spent on a change that was not waiting on an approval — and the reason says only that a review was dismissed.
 - **One push that dismisses two approvals wakes the author twice.** The delivery id is the unit of dedupe; the review is the unit of a dismissal.
 - A dismissal on a draft wakes nobody, by the same reasoning as an approval on one: a draft could not have landed.

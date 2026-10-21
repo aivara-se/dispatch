@@ -32,7 +32,7 @@ When a workflow run on a pull request completes as `failure`, the service wakes 
 
 This is the one delivery that wakes its own actor. A push does not tell the pusher that the checks failed, so the fact is news to the only agent that can act on it.
 
-A run that succeeded, was cancelled, timed out or was skipped wakes nobody. So does a failing run that names no pull request, and a pusher the configuration does not carry. A failing run that names several pull requests wakes once, with the first.
+A run that succeeded, was cancelled, timed out or was skipped wakes nobody. So does a failing run that names no pull request and runs on neither a pull request's branch nor the default one, and a pusher the configuration does not carry. A failing run that names several pull requests wakes once, with the first.
 
 A run that names no pull request and fails on the default branch — a `push` run — wakes the account that pushed it, with the branch in the reason instead of a number ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)). The branch is read from the payload, not configured. A failing run on the default branch that is not a `push` — a schedule, a dispatch, another workflow — wakes nobody, so a nightly that goes red stays the operator's to see.
 
@@ -105,7 +105,7 @@ Known, and deliberately not handled in this version. Each is a wake that does no
 - **A flaky check.** It spends the failure budget as surely as a real break; the count does not know the difference.
 - **A failing run that names several pull requests.** One run starts, carrying the first pull request's number; the others are named only when a later run fails.
 - **An agent already running.** A wake starts a second run; nothing queues and nothing waits.
-- **A restart.** A boot line marks it and both counts start over, so a redelivery inside the lost hour can wake the agent twice.
+- **A restart.** A boot line marks it and every count starts over, so a redelivery inside the lost hour can wake the agent twice.
 
 ## Acceptance
 

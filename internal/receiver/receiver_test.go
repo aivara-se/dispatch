@@ -172,6 +172,23 @@ func workflowRunBody(action, conclusion, actor string, numbers ...int) string {
 	}`, action, testRepo, conclusion, actor, strings.Join(pullRequests, ","), actor)
 }
 
+// pushRunBody is a workflow_run delivery for a push whose run names no pull
+// request.
+func pushRunBody(repository, event, action, conclusion, headBranch, defaultBranch, actor string) string {
+	return fmt.Sprintf(`{
+		"action": %q,
+		"repository": {"full_name": %q, "default_branch": %q},
+		"workflow_run": {
+			"event": %q,
+			"conclusion": %q,
+			"head_branch": %q,
+			"actor": {"login": %q},
+			"pull_requests": []
+		},
+		"sender": {"login": %q}
+	}`, action, repository, defaultBranch, event, conclusion, headBranch, actor, actor)
+}
+
 func commentBody(number int, action, association, sender, text string) string {
 	return fmt.Sprintf(`{
 		"action": %q,
@@ -630,6 +647,197 @@ func TestFailedCheckIsNotBlockedByTheReviewCap(t *testing.T) {
 	if len(runner.calls) != MaxRounds+1 {
 		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
 	}
+}
+
+func TestRedMainWakesItsPusher(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	// The sender is the actor: 010's exception reaches a run that names no
+	// pull request too.
+	body := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
+
+	if w := post(rc, "workflow_run", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch@main"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Number != 0 {
+		t.Fatalf("record = %+v, want started with no pull request number", got)
+	}
+}
+
+func TestRedMainWakesNobody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		why  string
+	}{
+		{"success", pushRunBody(testRepo, "push", "completed", "success", "main", "main", "thani-sh-meme"), "is not a delivery that acts"},
+		{"cancelled", pushRunBody(testRepo, "push", "completed", "cancelled", "main", "main", "thani-sh-meme"), "is not a delivery that acts"},
+		{"another event", pushRunBody(testRepo, "pull_request", "completed", "failure", "main", "main", "thani-sh-meme"), "is not a delivery that acts"},
+		{"another branch", pushRunBody(testRepo, "push", "completed", "failure", "release", "main", "thani-sh-meme"), "is not a delivery that acts"},
+		{"no default branch", pushRunBody(testRepo, "push", "completed", "failure", "", "", "thani-sh-meme"), "is not a delivery that acts"},
+		{"another action", pushRunBody(testRepo, "push", "requested", "failure", "main", "main", "thani-sh-meme"), "is not a delivery that acts"},
+		{"unconfigured actor", pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-missing"), "not a configured agent"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+
+			if w := post(rc, "workflow_run", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, tc.why) {
+				t.Fatalf("record = %+v, want ignored because %q", got, tc.why)
+			}
+		})
+	}
+}
+
+func TestRedMainStopsAfterFiveWakes(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+
+	// A failure that wakes nobody spends no budget.
+	unconfigured := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-missing")
+	if w := post(rc, "workflow_run", "unconfigured", unconfigured, sign(unconfigured)); w.Code != http.StatusAccepted {
+		t.Fatalf("unconfigured: status = %d, want 202", w.Code)
+	}
+
+	body := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
+	for i := 1; i <= MaxFailures; i++ {
+		if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("wake %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if len(runner.calls) != MaxFailures {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures)
+	}
+
+	if w := post(rc, "workflow_run", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("sixth: status = %d, want 202", w.Code)
+	}
+	last := recorder.records[len(recorder.records)-1]
+	if last.Decision != audit.Ignored || !strings.Contains(last.Why, "cap") {
+		t.Fatalf("record = %+v, want ignored for the cap", last)
+	}
+	if len(runner.calls) != MaxFailures {
+		t.Fatalf("runs started = %d, want %d after the cap", len(runner.calls), MaxFailures)
+	}
+}
+
+// TestRedMainCapIsPerRepository pins the counter's other key: a repository
+// whose main has spent its five wakes leaves another repository's main free.
+func TestRedMainCapIsPerRepository(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+
+	capped := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
+	for i := 1; i <= MaxFailures; i++ {
+		if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), capped, sign(capped)); w.Code != http.StatusAccepted {
+			t.Fatalf("wake %d: status = %d, want 202", i, w.Code)
+		}
+	}
+
+	other := pushRunBody("aivara-se/other", "push", "completed", "failure", "main", "main", "thani-sh-meme")
+	if w := post(rc, "workflow_run", "other", other, sign(other)); w.Code != http.StatusAccepted {
+		t.Fatalf("other repository: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxFailures+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures+1)
+	}
+}
+
+// TestRedMainCountsOnlyRunsThatNameNoPullRequest pins 014's second instance
+// against 010's: a push run on the default branch that names a pull request is
+// woken through the pull request's counter and spends no branch budget.
+func TestRedMainCountsOnlyRunsThatNameNoPullRequest(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+
+	named := fmt.Sprintf(`{
+		"action": "completed",
+		"repository": {"full_name": %q, "default_branch": "main"},
+		"workflow_run": {
+			"event": "push",
+			"conclusion": "failure",
+			"head_branch": "main",
+			"actor": {"login": "thani-sh-meme"},
+			"pull_requests": [{"number": 105}]
+		},
+		"sender": {"login": "thani-sh-meme"}
+	}`, testRepo)
+	for i := 1; i <= MaxFailures; i++ {
+		if w := post(rc, "workflow_run", fmt.Sprintf("n%d", i), named, sign(named)); w.Code != http.StatusAccepted {
+			t.Fatalf("named run %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if len(runner.calls) != MaxFailures {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures)
+	}
+
+	red := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
+	if w := post(rc, "workflow_run", "red", red, sign(red)); w.Code != http.StatusAccepted {
+		t.Fatalf("red main: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxFailures+1 {
+		t.Fatalf("runs started = %d, want %d: the branch's budget was spent by runs that name a pull request", len(runner.calls), MaxFailures+1)
+	}
+	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch@main"}
+	if got := runner.calls[len(runner.calls)-1]; got != want {
+		t.Fatalf("red main call = %+v, want %+v", got, want)
+	}
+}
+
+// TestRedMainCapIsSeparateFromThePullRequestCap pins that a branch's count and
+// a pull request's count are different counters, in both directions.
+func TestRedMainCapIsSeparateFromThePullRequestCap(t *testing.T) {
+	t.Run("branch capped leaves the pull request free", func(t *testing.T) {
+		runner := &stubRunner{}
+		rc, _ := newReceiver(runner)
+		red := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
+
+		for i := 1; i <= MaxFailures; i++ {
+			if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), red, sign(red)); w.Code != http.StatusAccepted {
+				t.Fatalf("branch wake %d: status = %d, want 202", i, w.Code)
+			}
+		}
+		pull := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
+		if w := post(rc, "workflow_run", "pull", pull, sign(pull)); w.Code != http.StatusAccepted {
+			t.Fatalf("pull request: status = %d, want 202", w.Code)
+		}
+		if len(runner.calls) != MaxFailures+1 {
+			t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures+1)
+		}
+	})
+
+	t.Run("pull request capped leaves the branch free", func(t *testing.T) {
+		runner := &stubRunner{}
+		rc, _ := newReceiver(runner)
+		pull := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
+
+		for i := 1; i <= MaxFailures; i++ {
+			if w := post(rc, "workflow_run", fmt.Sprintf("p%d", i), pull, sign(pull)); w.Code != http.StatusAccepted {
+				t.Fatalf("pull request wake %d: status = %d, want 202", i, w.Code)
+			}
+		}
+		red := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
+		if w := post(rc, "workflow_run", "branch", red, sign(red)); w.Code != http.StatusAccepted {
+			t.Fatalf("branch: status = %d, want 202", w.Code)
+		}
+		if len(runner.calls) != MaxFailures+1 {
+			t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures+1)
+		}
+	})
 }
 
 func TestMentionWakesEachAgentOnce(t *testing.T) {
@@ -1446,6 +1654,21 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"sender": {"login": "thani-sh-meme"}
 	}`, sentinel, sentinel, sentinel, sentinel)
 
+	redMain := fmt.Sprintf(`{
+		"action": "completed",
+		"repository": {"full_name": "aivara-se/dispatch", "default_branch": "main", "description": %q},
+		"workflow_run": {
+			"event": "push",
+			"conclusion": "failure",
+			"name": %q,
+			"display_title": %q,
+			"head_branch": "main",
+			"actor": {"login": "thani-sh-meme"},
+			"pull_requests": []
+		},
+		"sender": {"login": "thani-sh-meme"}
+	}`, sentinel, sentinel, sentinel)
+
 	mentioned := fmt.Sprintf(`{
 		"action": "created",
 		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
@@ -1510,6 +1733,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"checks failed", "workflow_run", failedRun, "meme",
 			"Dispatch: checks failed on aivara-se/dispatch#105",
+		},
+		{
+			"red main", "workflow_run", redMain, "meme",
+			"Dispatch: checks failed on aivara-se/dispatch@main",
 		},
 		{
 			"mentioned", "issue_comment", mentioned, "meme",

@@ -18,7 +18,7 @@ The payload answers it without an API call: `pull_request_review` with action `d
 
 ## What this overrides
 
-[002](002-github-webhook-ingestion.md)'s "One event acts" set is widened by one action, as every record since `006` has widened it, and its "the delivery's own actor is never woken" falls for this event as it falls in [`010`](010-a-failing-check-wakes-the-pusher.md). `012`'s conditions on an *approval* stand and are reused unchanged, `006`'s "an approval spends no round" holds for a dismissal, the roster match stands, and the no-API consequence still holds.
+[002](002-github-webhook-ingestion.md)'s "One event acts" set is widened by one action, as every record since `006` has widened it, and its "the delivery's own actor is never woken" falls for this event as it falls in [`010`](010-a-failing-check-wakes-the-pusher.md). `012`'s conditions on an *approval* stand, and its open and non-draft checks are reused; its armed check is not, as the consequence on armed pull requests records. [`007`](007-the-review-cap.md)'s "an approval or a comment adds nothing" holds for a dismissal, the roster match stands, and the no-API consequence still holds.
 
 ## Consequences
 

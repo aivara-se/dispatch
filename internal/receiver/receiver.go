@@ -31,9 +31,9 @@ const MaxRounds = 10
 // MaxFailures is the number of failed-check wakes a pull request gets.
 const MaxFailures = 5
 
-// Runner starts a profile's run.
+// Runner starts a profile's run and reports the child's exit status once.
 type Runner interface {
-	Start(profile, reason string) error
+	Start(profile, reason string, onExit func(exit int)) error
 }
 
 // Recorder appends a delivery's audit line.
@@ -287,7 +287,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 
 	rec.Profile = profile
 	rec.Reason = reason
-	if err := rc.runner.Start(profile, reason); err != nil {
+	if err := rc.runner.Start(profile, reason, rc.exit(rec.Delivery, profile)); err != nil {
 		rec.Decision = audit.StartFailed
 		rec.Why = err.Error()
 		return
@@ -298,6 +298,19 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	if redMain {
 		rc.pushRuns.add(branchKey(rec.Repository, p.WorkflowRun.HeadBranch))
+	}
+}
+
+// exit returns the callback a started run reports its exit through: a non-zero
+// status appends the run's own line, and a zero status appends nothing.
+func (rc *Receiver) exit(delivery, profile string) func(int) {
+	return func(code int) {
+		if code == 0 {
+			return
+		}
+		if err := rc.audit.Append(audit.Record{Delivery: delivery, Profile: profile, Exit: code}); err != nil {
+			log.Printf("dispatch: audit: %v", err)
+		}
 	}
 }
 
@@ -351,7 +364,7 @@ func (rc *Receiver) wakeAll(rec *audit.Record, logins []string, actor, reason st
 	rec.Reason = reason
 	var startErr error
 	for _, profile := range profiles {
-		if err := rc.runner.Start(profile, reason); err != nil && startErr == nil {
+		if err := rc.runner.Start(profile, reason, rc.exit(rec.Delivery, profile)); err != nil && startErr == nil {
 			startErr = err
 		}
 	}

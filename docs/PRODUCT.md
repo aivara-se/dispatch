@@ -172,4 +172,6 @@ v1.14 is done when each of these holds, and each is checkable by the operator.
 
 ## Roadmap
 
-Nothing is decided beyond v1.14. The changelog above is what runs, and the present tense of this document describes it.
+Not built. Each line is decided and unbuilt; the present tense of this document still describes v1.14.
+
+- **v1.15** — one run at a time per pull request and agent. A review request, a mention or a failed check that lands while that agent is already running on the same pull request is held, and one follow-up run starts when the run in flight exits, so two partial reviews of one head cannot be published ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)).

@@ -93,7 +93,9 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 ## Planned, not built
 
-Nothing else is decided and unbuilt; every list above describes v1.14.
+Every list above describes v1.14; two things are decided and unbuilt.
+
+**One run per pull request per agent** ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). A gate keyed `<repository>#<number>` and profile — `<repository>@<branch>` and profile for a default-branch run — holds at most one delivery per key. A delivery that lands while that key's run is live starts nothing; the run in flight's exit starts one follow-up carrying the most recent held delivery's reason, and the key is released on that exit. The audit gains the decision `held` and a line for the follow-up's start, paired with the delivery's own line by delivery id. The *Starting a run* section above still describes v1.14, which serialises nothing.
 
 **Observability, not a version** ([`020`](adrs/020-telemetry-leaves-through-a-collector.md)). The service serves `GET /metrics` in Prometheus text on `127.0.0.1:9464` — `dispatch_deliveries_total{event,decision}` and a `dispatch_delivery_duration_seconds` histogram — from `internal/metrics`, standard library only. A stock OpenTelemetry Collector on the host scrapes it and exports OTLP to whichever provider the operator configures; nothing in this repository builds, configures or restarts the collector. It adds no dependency, no configuration field, no audit line and no span.
 

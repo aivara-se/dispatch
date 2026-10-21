@@ -90,7 +90,9 @@ type payload struct {
 		Login string `json:"login"`
 	} `json:"requested_reviewer"`
 	Review struct {
-		State string `json:"state"`
+		State             string `json:"state"`
+		Body              string `json:"body"`
+		AuthorAssociation string `json:"author_association"`
 	} `json:"review"`
 	Issue struct {
 		Number int `json:"number"`
@@ -187,7 +189,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	redMain := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" &&
 		p.WorkflowRun.Event == "push" && len(p.WorkflowRun.PullRequests) == 0 &&
 		p.WorkflowRun.HeadBranch != "" && p.WorkflowRun.HeadBranch == p.Repository.DefaultBranch
-	mentioned := rec.Event == "issue_comment" && p.Action == "created"
+	mentioned := rec.Event == "issue_comment" && p.Action == "created" ||
+		rec.Event == "pull_request_review" && p.Action == "submitted" ||
+		rec.Event == "pull_request_review_comment" && p.Action == "created"
 	approved := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "approved" &&
 		p.PullRequest.State == "open" && !p.PullRequest.Draft && unarmed(p.PullRequest.AutoMerge)
 	ready := rec.Event == "pull_request" && p.Action == "ready_for_review"
@@ -222,7 +226,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		rc.rounds.add(pullRequestKey(rec.Repository, rec.Number))
 	}
 	if mentioned {
-		rc.decideMention(rec, p)
+		rc.decideMention(rec, p, changes, approved)
 		return
 	}
 	if ready {
@@ -249,18 +253,12 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		}
 		login = p.RequestedReviewer.Login
 		reason = fmt.Sprintf("Dispatch: review requested on %s#%d", rec.Repository, rec.Number)
-	case changes:
-		login = p.PullRequest.User.Login
-		reason = fmt.Sprintf("Dispatch: changes requested on %s#%d", rec.Repository, rec.Number)
 	case failed:
 		login = p.WorkflowRun.Actor.Login
 		reason = fmt.Sprintf("Dispatch: checks failed on %s#%d", rec.Repository, rec.Number)
 	case redMain:
 		login = p.WorkflowRun.Actor.Login
 		reason = fmt.Sprintf("Dispatch: checks failed on %s@%s", rec.Repository, p.WorkflowRun.HeadBranch)
-	case approved:
-		login = p.PullRequest.User.Login
-		reason = fmt.Sprintf("Dispatch: approved but not armed on %s#%d", rec.Repository, rec.Number)
 	default:
 		if p.Assignee == nil || p.Assignee.Login == "" {
 			rec.Decision = audit.Ignored
@@ -319,66 +317,130 @@ func unarmed(autoMerge json.RawMessage) bool {
 	return len(autoMerge) == 0 || string(autoMerge) == "null"
 }
 
-// decideMention wakes each configured agent named in a comment, once.
-func (rc *Receiver) decideMention(rec *audit.Record, p *payload) {
-	if !mayMention(p.Comment.AuthorAssociation) {
-		rec.Decision = audit.Ignored
-		rec.Why = fmt.Sprintf("author association %q may not summon an agent", p.Comment.AuthorAssociation)
-		return
+// decideMention wakes each configured login a comment or a review names, and
+// the author a review itself targets, on the delivery's one line. The author's
+// reason leads the line; a mention's is its own.
+func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approved bool) {
+	body, association := mentionSource(rec, p)
+
+	var targets []target
+	if changes {
+		targets = append(targets, target{
+			login:  p.PullRequest.User.Login,
+			reason: fmt.Sprintf("Dispatch: changes requested on %s#%d", rec.Repository, rec.Number),
+		})
 	}
-	logins := mentionedLogins(p.Comment.Body, rc.agents)
-	if len(logins) == 0 {
+	if approved {
+		targets = append(targets, target{
+			login:  p.PullRequest.User.Login,
+			reason: fmt.Sprintf("Dispatch: approved but not armed on %s#%d", rec.Repository, rec.Number),
+		})
+	}
+	named := mentionedLogins(body, rc.agents)
+	if mayMention(association) {
+		reason := fmt.Sprintf("Dispatch: mentioned on %s#%d", rec.Repository, rec.Number)
+		for _, login := range named {
+			targets = append(targets, target{login: login, reason: reason})
+		}
+	}
+	if len(targets) == 0 {
 		rec.Decision = audit.Ignored
-		rec.Why = "no configured agent was mentioned"
+		if len(named) > 0 && !mayMention(association) {
+			rec.Why = fmt.Sprintf("author association %q may not summon an agent", association)
+		} else {
+			rec.Why = "no configured agent was mentioned"
+		}
 		return
 	}
 
-	reason := fmt.Sprintf("Dispatch: mentioned on %s#%d", rec.Repository, rec.Number)
-	if !rc.wakeAll(rec, logins, p.Sender.Login, reason) {
+	if started, why := rc.wakeTargets(rec, targets, p.Sender.Login); !started {
 		rec.Decision = audit.Ignored
-		rec.Why = "the delivery's actor is the login to wake"
+		rec.Why = why
 	}
+}
+
+// mentionSource returns the text a delivery's mention is read from and the
+// association of its author.
+func mentionSource(rec *audit.Record, p *payload) (body, association string) {
+	if rec.Event == "pull_request_review" {
+		return p.Review.Body, p.Review.AuthorAssociation
+	}
+	return p.Comment.Body, p.Comment.AuthorAssociation
 }
 
 // wakeAll starts one run per configured login, once, skipping the actor, and
 // records the started profiles. It reports whether any run was started.
 func (rc *Receiver) wakeAll(rec *audit.Record, logins []string, actor, reason string) bool {
-	seen := make(map[string]bool, len(logins))
-	profiles := make([]string, 0, len(logins))
-	for _, login := range logins {
-		if login == "" || login == actor || seen[login] {
+	targets := make([]target, len(logins))
+	for i, login := range logins {
+		targets[i] = target{login: login, reason: reason}
+	}
+	started, _ := rc.wakeTargets(rec, targets, actor)
+	return started
+}
+
+// target is one login to wake and the reason it is woken with.
+type target struct {
+	login  string
+	reason string
+}
+
+// wakeTargets starts one run per target, once each and skipping the actor, and
+// records the started profiles on the delivery's line with the first started
+// target's reason. It reports whether any run was started, and when none was,
+// why the first target was refused.
+func (rc *Receiver) wakeTargets(rec *audit.Record, targets []target, actor string) (bool, string) {
+	seen := make(map[string]bool, len(targets))
+	profiles := make([]string, 0, len(targets))
+	reasons := make([]string, 0, len(targets))
+	why := ""
+	for _, t := range targets {
+		if t.login == "" {
 			continue
 		}
-		seen[login] = true
-		profile, ok := rc.agents[login]
+		if t.login == actor {
+			if why == "" {
+				why = "the delivery's actor is the login to wake"
+			}
+			continue
+		}
+		if seen[t.login] {
+			continue
+		}
+		seen[t.login] = true
+		profile, ok := rc.agents[t.login]
 		if !ok {
+			if why == "" {
+				why = fmt.Sprintf("%q is not a configured agent", t.login)
+			}
 			continue
 		}
 		profiles = append(profiles, profile)
+		reasons = append(reasons, t.reason)
 	}
 	if len(profiles) == 0 {
-		return false
+		return false, why
 	}
 
 	rec.Profile = strings.Join(profiles, ",")
-	rec.Reason = reason
+	rec.Reason = reasons[0]
 	var startErr error
-	for _, profile := range profiles {
-		if err := rc.runner.Start(profile, reason, rc.exit(rec.Delivery, profile)); err != nil && startErr == nil {
+	for i, profile := range profiles {
+		if err := rc.runner.Start(profile, reasons[i], rc.exit(rec.Delivery, profile)); err != nil && startErr == nil {
 			startErr = err
 		}
 	}
 	if startErr != nil {
 		rec.Decision = audit.StartFailed
 		rec.Why = startErr.Error()
-		return true
+		return true, ""
 	}
 	rec.Decision = audit.Started
-	return true
+	return true, ""
 }
 
-// mayMention reports whether a comment's author association may summon an
-// agent.
+// mayMention reports whether a comment's or review's author association may
+// summon an agent.
 func mayMention(association string) bool {
 	switch association {
 	case "OWNER", "MEMBER", "COLLABORATOR":

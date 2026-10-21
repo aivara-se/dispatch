@@ -210,7 +210,8 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rc.seen.add(rec.Delivery)
 
-	if (review || changes) && rc.rounds.reached(pullRequestKey(rec.Repository, rec.Number)) {
+	capped := (review || changes) && rc.rounds.reached(pullRequestKey(rec.Repository, rec.Number))
+	if capped && !mentioned {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
 		return
@@ -225,11 +226,11 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		rec.Why = fmt.Sprintf("the %d-wake cap was reached for the branch", MaxFailures)
 		return
 	}
-	if changes {
+	if changes && !capped {
 		rc.rounds.add(pullRequestKey(rec.Repository, rec.Number))
 	}
 	if mentioned {
-		rc.decideMention(rec, p, changes, approved)
+		rc.decideMention(rec, p, changes && !capped, approved, capped)
 		return
 	}
 	if ready {
@@ -330,8 +331,9 @@ func merged(at json.RawMessage) bool {
 
 // decideMention wakes each configured login a comment or a review names, and
 // the author a review itself targets, on the delivery's one line. The author's
-// reason leads the line; a mention's is its own.
-func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approved bool) {
+// reason leads the line; a mention's is its own. capped reports that the
+// round cap refused the review's own targets: a mention consults neither cap.
+func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approved, capped bool) {
 	body, association := mentionSource(rec, p)
 
 	var targets []target
@@ -356,9 +358,12 @@ func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approv
 	}
 	if len(targets) == 0 {
 		rec.Decision = audit.Ignored
-		if len(named) > 0 && !mayMention(association) {
+		switch {
+		case len(named) > 0 && !mayMention(association):
 			rec.Why = fmt.Sprintf("author association %q may not summon an agent", association)
-		} else {
+		case capped:
+			rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
+		default:
 			rec.Why = "no configured agent was mentioned"
 		}
 		return

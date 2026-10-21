@@ -1274,6 +1274,61 @@ func TestMentionIgnoresTheReviewCap(t *testing.T) {
 	}
 }
 
+// TestChangesReviewMentionIgnoresTheReviewCap pins the same for a review: at
+// ten rounds a changes-requested review still wakes the login its body names,
+// while the author whose wake the cap refuses stays asleep.
+func TestChangesReviewMentionIgnoresTheReviewCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama", "@thani-sh-meme look here")
+	if w := post(rc, "pull_request_review", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("capped review: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
+	}
+	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}
+	if got := runner.calls[len(runner.calls)-1]; got != want {
+		t.Fatalf("mention call = %+v, want %+v", got, want)
+	}
+	got := recorder.records[len(recorder.records)-1]
+	if got.Decision != audit.Started || got.Profile != "meme" || got.Reason != want.reason {
+		t.Fatalf("record = %+v, want started meme with %q", got, want.reason)
+	}
+}
+
+// TestCappedChangesReviewNamesTheCap pins the reason a capped review carries
+// when its body names nobody: the cap refused it, not the mention path.
+func TestCappedChangesReviewNamesTheCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama", "still not right")
+	if w := post(rc, "pull_request_review", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("capped review: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds)
+	}
+	got := recorder.records[len(recorder.records)-1]
+	if want := fmt.Sprintf("the %d-round cap was reached", MaxRounds); got.Decision != audit.Ignored || got.Why != want {
+		t.Fatalf("capped record = %+v, want ignored with %q", got, want)
+	}
+}
+
 func TestUnarmedApprovalWakesAuthor(t *testing.T) {
 	runner := &stubRunner{}
 	rc, recorder := newReceiver(runner)

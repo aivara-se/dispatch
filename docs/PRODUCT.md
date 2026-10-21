@@ -150,6 +150,6 @@ Decided, not built. The changelog above is what runs; nothing here is in the bin
 - **v1.9** — a failing run on the default branch wakes the account that pushed it, so a red `main` is not the one failure nobody hears about ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)).
 - **v1.10** — the audit carries a run that ended non-zero, so a wake that was started and died is visible ([`015`](adrs/015-the-audit-records-a-runs-exit.md)).
 - **v1.11** — a mention is read in a review's body and in a review comment, where the review conversation is written ([`016`](adrs/016-a-mention-reads-the-reviews-own-surfaces.md)).
-- **v1.12** — a dismissed review wakes the pull request's author, because the approval the change was waiting on is gone ([`017`](adrs/017-a-dismissed-review-wakes-the-author.md)).
+- **v1.12** — a dismissed review wakes the pull request's author, because the approval the change was waiting on is gone — and it wakes them even when their own push is what dismissed it ([`017`](adrs/017-a-dismissed-review-wakes-the-author.md), [`020`](adrs/020-a-dismissal-wakes-the-author-who-caused-it.md)).
 - **v1.13** — the service's own boot reaches the audit, so a restart is visible and the moment a count was lost is marked ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
 - **v1.14** — every wake's session is tagged `dispatch`, so the service's own runs are one filter in the session list ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).

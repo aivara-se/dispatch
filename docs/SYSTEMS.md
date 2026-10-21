@@ -84,6 +84,14 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 - **A run that cannot start** — recorded on the line, answered `202`, not retried.
 - **A crash or a restart** — out of scope: the cache, the round counts and any run in flight are not reconciled, and a delivery redelivered inside the lost hour can start one extra run.
 
+## Planned, not built
+
+v1.9 to v1.11 are decided ([PRODUCT](PRODUCT.md), *Roadmap*) and not in the binary. Every list above describes v1.8; each of these is added to it by the code that lands it.
+
+- **v1.9** — `workflow_run` completed, conclusion `failure`, event `push`, no pull request named and `head_branch` equal to `repository.default_branch`: wake the run's actor with `Dispatch: checks failed on <repository>@<branch>`, at most five times per repository and branch ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)).
+- **v1.10** — a child that exits non-zero appends one audit line carrying the delivery id, the profile and the exit status; a run that exits zero appends nothing ([`015`](adrs/015-the-audit-records-a-runs-exit.md)).
+- **v1.11** — the mention path also reads `pull_request_review` submitted and `pull_request_review_comment` created, under the same association guard and the same reason ([`016`](adrs/016-a-mention-reads-the-reviews-own-surfaces.md)).
+
 ## Checks
 
 ```sh

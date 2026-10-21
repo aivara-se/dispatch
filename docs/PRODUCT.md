@@ -145,4 +145,8 @@ v1.8 is done when each of these holds, and each is checkable by the operator.
 
 ## Roadmap
 
-Nothing is decided and not yet built. Every version this section carried has landed, and each is in the changelog above.
+Decided, not built. The changelog above is what runs; nothing here is in the binary, and the present tense of this document still describes v1.8.
+
+- **v1.9** — a failing run on the default branch wakes the account that pushed it, so a red `main` is not the one failure nobody hears about ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)).
+- **v1.10** — the audit carries a run that ended non-zero, so a wake that was started and died is visible ([`015`](adrs/015-the-audit-records-a-runs-exit.md)).
+- **v1.11** — a mention is read in a review's body and in a review comment, where the review conversation is written ([`016`](adrs/016-a-mention-reads-the-reviews-own-surfaces.md)).

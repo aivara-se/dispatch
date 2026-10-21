@@ -44,13 +44,19 @@ type stubRunner struct {
 	mu    sync.Mutex
 	calls []call
 	err   error
+	exit  int
 }
 
-func (s *stubRunner) Start(profile, reason string) error {
+func (s *stubRunner) Start(profile, reason string, onExit func(exit int)) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.calls = append(s.calls, call{profile: profile, reason: reason})
-	return s.err
+	err := s.err
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	onExit(s.exit)
+	return nil
 }
 
 type memAudit struct {
@@ -1573,6 +1579,87 @@ func TestRunThatCannotStartIsRecorded(t *testing.T) {
 	}
 	if recorder.records[0].Why == "" {
 		t.Fatal("start_failed record carries no reason")
+	}
+}
+
+// TestRunThatExitsNonZeroAppendsItsOwnLine pins 015's run line: the delivery
+// id, the profile and the exit status, and no other field.
+func TestRunThatExitsNonZeroAppendsItsOwnLine(t *testing.T) {
+	runner := &stubRunner{exit: 3}
+	rc, recorder := newReceiver(runner)
+	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
+
+	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(recorder.records) != 2 {
+		t.Fatalf("audit records = %d, want the delivery's and the run's", len(recorder.records))
+	}
+
+	var got audit.Record
+	for _, r := range recorder.records {
+		if r.Exit != 0 {
+			got = r
+		}
+	}
+	if got.Delivery != "d1" || got.Profile != "meme" || got.Exit != 3 {
+		t.Fatalf("run record = %+v, want d1, meme and exit 3", recorder.records)
+	}
+	line, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(line, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 3 {
+		t.Fatalf("run line = %s, want the delivery, the profile and the exit alone", line)
+	}
+}
+
+func TestRunThatExitsZeroAppendsNothing(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
+
+	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("audit records = %+v, want the delivery's line alone", recorder.records)
+	}
+	if recorder.records[0].Decision != audit.Started {
+		t.Fatalf("decision = %q, want started", recorder.records[0].Decision)
+	}
+}
+
+// TestEachRunOfADeliveryReportsItsOwnExit pins that a delivery waking several
+// profiles records each child's exit against the profile it started.
+func TestEachRunOfADeliveryReportsItsOwnExit(t *testing.T) {
+	runner := &stubRunner{exit: 2}
+	rc, recorder := newReceiver(runner)
+	body := readyBody("thani-sh", "thani-sh-meme", "thani-sh-mama")
+
+	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(recorder.records) != 3 {
+		t.Fatalf("audit records = %d, want the delivery's and two runs'", len(recorder.records))
+	}
+
+	var profiles []string
+	for _, r := range recorder.records {
+		if r.Exit != 0 {
+			if r.Exit != 2 || r.Delivery != "d1" {
+				t.Fatalf("run record = %+v, want d1 and exit 2", r)
+			}
+			profiles = append(profiles, r.Profile)
+		}
+	}
+	want := []string{"mama", "meme"}
+	if len(profiles) != len(want) || profiles[0] != want[0] || profiles[1] != want[1] {
+		t.Fatalf("run profiles = %v, want %v", profiles, want)
 	}
 }
 

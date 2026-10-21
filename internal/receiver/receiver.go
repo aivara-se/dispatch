@@ -50,6 +50,7 @@ type Receiver struct {
 	seen     *seen
 	rounds   *counter
 	failures *counter
+	pushRuns *counter
 }
 
 // New returns a Receiver for the given secret and configured login-to-profile
@@ -63,13 +64,15 @@ func New(secret []byte, agents map[string]string, runner Runner, recorder Record
 		seen:     newSeen(DedupTTL, time.Now),
 		rounds:   newCounter(MaxRounds),
 		failures: newCounter(MaxFailures),
+		pushRuns: newCounter(MaxFailures),
 	}
 }
 
 type payload struct {
 	Action     string `json:"action"`
 	Repository struct {
-		FullName string `json:"full_name"`
+		FullName      string `json:"full_name"`
+		DefaultBranch string `json:"default_branch"`
 	} `json:"repository"`
 	PullRequest struct {
 		Number    int             `json:"number"`
@@ -97,6 +100,8 @@ type payload struct {
 	} `json:"assignee"`
 	WorkflowRun struct {
 		Conclusion string `json:"conclusion"`
+		Event      string `json:"event"`
+		HeadBranch string `json:"head_branch"`
 		Actor      struct {
 			Login string `json:"login"`
 		} `json:"actor"`
@@ -179,11 +184,14 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	changes := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "changes_requested"
 	assigned := (rec.Event == "issues" || rec.Event == "pull_request") && p.Action == "assigned"
 	failed := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" && len(p.WorkflowRun.PullRequests) > 0
+	redMain := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" &&
+		p.WorkflowRun.Event == "push" && len(p.WorkflowRun.PullRequests) == 0 &&
+		p.WorkflowRun.HeadBranch != "" && p.WorkflowRun.HeadBranch == p.Repository.DefaultBranch
 	mentioned := rec.Event == "issue_comment" && p.Action == "created"
 	approved := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "approved" &&
 		p.PullRequest.State == "open" && !p.PullRequest.Draft && unarmed(p.PullRequest.AutoMerge)
 	ready := rec.Event == "pull_request" && p.Action == "ready_for_review"
-	if !review && !changes && !assigned && !failed && !mentioned && !approved && !ready {
+	if !review && !changes && !assigned && !failed && !redMain && !mentioned && !approved && !ready {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("event %q with action %q is not a delivery that acts", rec.Event, p.Action)
 		return
@@ -195,18 +203,23 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rc.seen.add(rec.Delivery)
 
-	if (review || changes) && rc.rounds.reached(rec.Repository, rec.Number) {
+	if (review || changes) && rc.rounds.reached(pullRequestKey(rec.Repository, rec.Number)) {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
 		return
 	}
-	if failed && rc.failures.reached(rec.Repository, rec.Number) {
+	if failed && rc.failures.reached(pullRequestKey(rec.Repository, rec.Number)) {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("the %d-wake cap was reached", MaxFailures)
 		return
 	}
+	if redMain && rc.pushRuns.reached(branchKey(rec.Repository, p.WorkflowRun.HeadBranch)) {
+		rec.Decision = audit.Ignored
+		rec.Why = fmt.Sprintf("the %d-wake cap was reached for the branch", MaxFailures)
+		return
+	}
 	if changes {
-		rc.rounds.add(rec.Repository, rec.Number)
+		rc.rounds.add(pullRequestKey(rec.Repository, rec.Number))
 	}
 	if mentioned {
 		rc.decideMention(rec, p)
@@ -242,6 +255,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	case failed:
 		login = p.WorkflowRun.Actor.Login
 		reason = fmt.Sprintf("Dispatch: checks failed on %s#%d", rec.Repository, rec.Number)
+	case redMain:
+		login = p.WorkflowRun.Actor.Login
+		reason = fmt.Sprintf("Dispatch: checks failed on %s@%s", rec.Repository, p.WorkflowRun.HeadBranch)
 	case approved:
 		login = p.PullRequest.User.Login
 		reason = fmt.Sprintf("Dispatch: approved but not armed on %s#%d", rec.Repository, rec.Number)
@@ -257,7 +273,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 			reason = fmt.Sprintf("Dispatch: pull request assigned on %s#%d", rec.Repository, rec.Number)
 		}
 	}
-	if !failed && p.Sender.Login == login {
+	if !failed && !redMain && p.Sender.Login == login {
 		rec.Decision = audit.Ignored
 		rec.Why = "the delivery's actor is the login to wake"
 		return
@@ -278,7 +294,10 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rec.Decision = audit.Started
 	if failed {
-		rc.failures.add(rec.Repository, rec.Number)
+		rc.failures.add(pullRequestKey(rec.Repository, rec.Number))
+	}
+	if redMain {
+		rc.pushRuns.add(branchKey(rec.Repository, p.WorkflowRun.HeadBranch))
 	}
 }
 
@@ -395,34 +414,38 @@ func isLoginByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-'
 }
 
-// counter is an in-memory cap per pull request.
+// counter is an in-memory cap per key.
 type counter struct {
 	mu    sync.Mutex
 	limit int
-	count map[prKey]int
+	count map[string]int
 }
 
-type prKey struct {
-	repository string
-	number     int
+// pullRequestKey names one pull request's entry in a counter.
+func pullRequestKey(repository string, number int) string {
+	return fmt.Sprintf("%s#%d", repository, number)
+}
+
+// branchKey names one branch's entry in a counter.
+func branchKey(repository, branch string) string {
+	return repository + "@" + branch
 }
 
 func newCounter(limit int) *counter {
-	return &counter{limit: limit, count: make(map[prKey]int)}
+	return &counter{limit: limit, count: make(map[string]int)}
 }
 
-// reached reports whether the pull request has reached the counter's limit.
-func (c *counter) reached(repository string, number int) bool {
+// reached reports whether the key's count has reached the counter's limit.
+func (c *counter) reached(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.count[prKey{repository, number}] >= c.limit
+	return c.count[key] >= c.limit
 }
 
-// add records one event for the pull request.
-func (c *counter) add(repository string, number int) {
+// add records one event for the key.
+func (c *counter) add(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	key := prKey{repository, number}
 	if c.count[key] < c.limit {
 		c.count[key]++
 	}

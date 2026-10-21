@@ -19,18 +19,23 @@ const (
 	StartFailed = "start_failed"
 )
 
-// Record is one delivery's line. It never carries a secret value or a payload
-// body.
+// Record is one line of the audit. A delivery's line carries the delivery and
+// what the service did with it; a run's line carries the delivery it was
+// started for, the profile and the exit status; a boot's line carries the
+// service's own start ([`015`](docs/adrs/015-the-audit-records-a-runs-exit.md),
+// [`018`](docs/adrs/018-the-services-boot-reaches-the-audit.md)). It never
+// carries a secret value or a payload body.
 type Record struct {
-	Delivery   string `json:"delivery"`
-	Event      string `json:"event"`
+	Delivery   string `json:"delivery,omitempty"`
+	Event      string `json:"event,omitempty"`
 	Repository string `json:"repository,omitempty"`
 	Number     int    `json:"number,omitempty"`
-	Decision   string `json:"decision"`
+	Decision   string `json:"decision,omitempty"`
 	Profile    string `json:"profile,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	Why        string `json:"why,omitempty"`
-	Answer     int    `json:"answer"`
+	Answer     int    `json:"answer,omitempty"`
+	Exit       int    `json:"exit,omitempty"`
 }
 
 // Log is the audit file, rotated once past its size bound.

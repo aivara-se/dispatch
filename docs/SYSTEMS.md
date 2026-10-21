@@ -4,7 +4,7 @@ This document describes v1.8; the flows and their acceptance are [PRODUCT](PRODU
 
 ## Where it runs
 
-One long-running process on the operator's host, beside the Hermes home, as a systemd user unit that restarts on failure. It binds loopback and is reached through the host's reverse proxy, which terminates TLS; GitHub is its only inbound client. The binary is static and the deploy is a new binary plus a unit restart — there is no deploy pipeline ([`001`](adrs/001-go-and-the-standard-library.md)).
+One long-running process on the operator's host, beside the Hermes home, as a systemd user unit that restarts on failure. It binds loopback and is reached through the host's reverse proxy, which terminates TLS; GitHub is its only public client, and a collector on the same host reads its metrics over loopback ([`020`](adrs/020-telemetry-leaves-through-a-collector.md)). The binary is static and the deploy is a new binary plus a unit restart — there is no deploy pipeline ([`001`](adrs/001-go-and-the-standard-library.md)).
 
 The unit, the environment file and the proxy site are `README.md` (*Run it on the host*).
 
@@ -94,6 +94,8 @@ v1.9 to v1.14 are decided ([PRODUCT](PRODUCT.md), *Roadmap*) and not in the bina
 - **v1.12** — `pull_request_review` dismissed on an open, unmerged, non-draft pull request wakes `pull_request.user.login` with `Dispatch: approval dismissed on <repository>#<number>`; no count and no subscription change ([`017`](adrs/017-a-dismissed-review-wakes-the-author.md)).
 - **v1.13** — one audit line at boot with the build's revision, the listen address and the number of configured agents; no heartbeat and no shutdown line ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
 - **v1.14** — the run's argv gains `--source dispatch`, so its session is tagged with the service's name; no title, no session id and no pid are added ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).
+
+**Observability, not a version** ([`020`](adrs/020-telemetry-leaves-through-a-collector.md)). The service serves `GET /metrics` in Prometheus text on `127.0.0.1:9464` — `dispatch_deliveries_total{event,decision}` and a `dispatch_delivery_duration_seconds` histogram — from `internal/metrics`, standard library only. A stock OpenTelemetry Collector on the host scrapes it and exports OTLP to whichever provider the operator configures; nothing in this repository builds, configures or restarts the collector. It adds no dependency, no configuration field, no audit line and no span.
 
 ## Checks
 

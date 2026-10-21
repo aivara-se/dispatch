@@ -4,7 +4,9 @@
 
 `016` reads a mention in a submitted review's body and in an inline review comment, under `011`'s guard: only an `author_association` of `OWNER`, `MEMBER` or `COLLABORATOR` may summon an agent.
 
-On those two surfaces GitHub reports that field differently from an issue comment. For accounts whose `issue_comment` payload says `MEMBER`, the `pull_request_review` and `pull_request_review_comment` payloads say `CONTRIBUTOR`, and in one case `NONE` — dumped from an Actions run, while `gh api orgs/aivara-se/memberships/<login>` says `member`, `active`. The guard is therefore always refused there, and a mention in a review body or in an inline comment has never woken anyone. v1.11 is inert on the surface it added.
+On those two surfaces the field is computed from public repository relations, so a member whose organisation membership is private is reported as `CONTRIBUTOR`, or `NONE`. Dumped from an Actions run on `aivara-se/dispatch-test` on 2026-10-21: `issue_comment.created` by `thani-sh-meme` carries `comment.author_association: MEMBER`, while a review and an inline review comment by the same login carry `review.author_association: NONE` and `comment.author_association: NONE`. That login is `state: active`, `role: member` in `gh api orgs/aivara-se/memberships/thani-sh-meme`, and `gh api orgs/aivara-se/public_members` returns `[]` — no membership is public, which is the documented reason a webhook reports a member as `CONTRIBUTOR`. The guard is therefore refused on both surfaces, and v1.11 is inert on the surface it added.
+
+Making every agent's membership public, or inviting each one as a direct collaborator, would restore `011`'s guard as written. Both change the account's standing in the organisation rather than the fact a delivery is judged on, so neither is taken.
 
 The payload carries the identities to judge instead: `review.user` and `comment.user` (the text's author) and `pull_request.user` (the pull request's author) (`common/pull-request-review.schema.json`, `common/pull-request-review-comment.schema.json` and `common/simple-pull-request.schema.json`, read 2026-10-21). No API call is needed.
 

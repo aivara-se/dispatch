@@ -66,7 +66,7 @@ This is the transition from probe to candidate: the reviewers were woken when th
 - Never writes to GitHub: no label, no comment, no merge, no push.
 - Never holds a wake back or queues one: a review request, an assignment, a failed check, a mention, a dismissal or a draft marked ready starts a run even if the agent is already running one.
 - Never logs a payload body or a secret value.
-- Never carries text a third party wrote into a run: the reason is identifiers and the service's own words. A comment, a review body or a review comment is read only to find a configured login in it.
+- Never carries text a third party wrote into a run: the reason is identifiers and the service's own words. A comment, a review body or a review comment is read only to find a configured login in it. The one branch in a reason is the red-main ref, which a number would be if the run named a pull request.
 - Never orders events, and never depends on their order.
 
 ## What v1.14 does not do

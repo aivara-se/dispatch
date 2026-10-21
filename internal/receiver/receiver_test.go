@@ -218,9 +218,9 @@ func reviewSurfaceBody(action, state, association, sender, author, text string) 
 			"auto_merge": null,
 			"user": {"login": %q}
 		},
-		"review": {"state": %q, "body": %q, "author_association": %q},
+		"review": {"state": %q, "body": %q, "author_association": %q, "user": {"login": %q}},
 		"sender": {"login": %q}
-	}`, action, testRepo, author, state, text, association, sender)
+	}`, action, testRepo, author, state, text, association, sender, sender)
 }
 
 // reviewCommentBody is a pull_request_review_comment delivery on pull request
@@ -230,9 +230,9 @@ func reviewCommentBody(action, association, sender, text string) string {
 		"action": %q,
 		"repository": {"full_name": %q},
 		"pull_request": {"number": 105},
-		"comment": {"body": %q, "author_association": %q},
+		"comment": {"body": %q, "author_association": %q, "user": {"login": %q}},
 		"sender": {"login": %q}
-	}`, action, testRepo, text, association, sender)
+	}`, action, testRepo, text, association, sender, sender)
 }
 
 // dismissedBody is a dismissed pull_request_review delivery on pull request
@@ -1038,6 +1038,150 @@ func TestReviewMentionNeedsAnAssociation(t *testing.T) {
 			got := recorder.records[0]
 			if got.Decision != audit.Ignored || !strings.Contains(got.Why, "association") {
 				t.Fatalf("record = %+v, want ignored for the association", got)
+			}
+		})
+	}
+}
+
+// reviewTrustBody is a submitted review whose author, association, pull request
+// author and the reviewer the pull request still asks the caller sets. An empty
+// reviewer leaves that set empty, as it is once a review is submitted.
+func reviewTrustBody(author, association, prAuthor, reviewer, text string) string {
+	requested := ""
+	if reviewer != "" {
+		requested = fmt.Sprintf(`{"login": %q}`, reviewer)
+	}
+	return fmt.Sprintf(`{
+		"action": "submitted",
+		"repository": {"full_name": %q},
+		"pull_request": {
+			"number": 105,
+			"state": "open",
+			"draft": false,
+			"auto_merge": null,
+			"user": {"login": %q},
+			"requested_reviewers": [%s]
+		},
+		"review": {"state": "commented", "body": %q, "author_association": %q, "user": {"login": %q}},
+		"sender": {"login": %q}
+	}`, testRepo, prAuthor, requested, text, association, author, author)
+}
+
+// TestReviewMentionIsTrustedForThePullRequestAuthor pins 021's first widened
+// identity: the pull request's own author may summon from a review, whatever
+// GitHub's association says and with no reviewer left requested.
+func TestReviewMentionIsTrustedForThePullRequestAuthor(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewTrustBody("thani-sh", "CONTRIBUTOR", "thani-sh", "", "@thani-sh-meme, a note.")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	if got := recorder.records[0]; got.Decision != audit.Started {
+		t.Fatalf("record = %+v, want started", got)
+	}
+}
+
+// TestReviewMentionIsTrustedForAConfiguredAgent pins the second: an agent may
+// summon a peer from its own submitted review, on the payload GitHub actually
+// sends — association CONTRIBUTOR and no reviewer left requested.
+func TestReviewMentionIsTrustedForAConfiguredAgent(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	body := reviewTrustBody("thani-sh-meme", "CONTRIBUTOR", "thani-sh", "", "@thani-sh-mama, over to you.")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "mama", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+}
+
+// TestReviewCommentMentionIsTrustedForThePullRequestAuthor pins the same
+// widening on an inline review comment.
+func TestReviewCommentMentionIsTrustedForThePullRequestAuthor(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+	body := fmt.Sprintf(`{
+		"action": "created",
+		"repository": {"full_name": %q},
+		"pull_request": {"number": 105, "user": {"login": "thani-sh"}, "requested_reviewers": []},
+		"comment": {"body": "@thani-sh-meme is this covered?", "author_association": "NONE", "user": {"login": "thani-sh"}},
+		"sender": {"login": "thani-sh"}
+	}`, testRepo)
+
+	if w := post(rc, "pull_request_review_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+}
+
+// TestReviewMentionFromAStrangerIsRefused pins the guard's edge: an author who
+// is neither the pull request's author nor a login the service runs summons
+// nobody, even with a reviewer the set still names.
+func TestReviewMentionFromAStrangerIsRefused(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewTrustBody("thani-sh-stranger", "NONE", "thani-sh", "thani-sh-meme", "@thani-sh-meme, hello.")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runs started = %d, want 0", len(runner.calls))
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Ignored || !strings.Contains(got.Why, "association") || !strings.Contains(got.Why, "thani-sh-stranger") {
+		t.Fatalf("record = %+v, want ignored naming the author and the association", got)
+	}
+}
+
+// TestMayMentionTrustsIdentitiesOnlyOnReviewSurfaces pins 021's shape: the
+// widening belongs to the two review surfaces, and a comment keeps 011's guard
+// alone.
+func TestMayMentionTrustsIdentitiesOnlyOnReviewSurfaces(t *testing.T) {
+	rc, _ := newReceiver(&stubRunner{})
+	var p payload
+	if err := json.Unmarshal([]byte(`{
+		"pull_request": {
+			"user": {"login": "thani-sh"},
+			"requested_reviewers": [{"login": "thani-sh-meme"}]
+		}
+	}`), &p); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name          string
+		author        string
+		association   string
+		reviewSurface bool
+		want          bool
+	}{
+		{"review, the pull request's author", "thani-sh", "CONTRIBUTOR", true, true},
+		{"review, a configured agent", "thani-sh-meme", "CONTRIBUTOR", true, true},
+		{"review, a configured agent in another case", "Thani-Sh-Meme", "NONE", true, true},
+		{"review, a stranger", "thani-sh-stranger", "NONE", true, false},
+		{"review, a member by association", "thani-sh-stranger", "MEMBER", true, true},
+		{"comment, the pull request's author", "thani-sh", "CONTRIBUTOR", false, false},
+		{"comment, a configured agent", "thani-sh-meme", "NONE", false, false},
+		{"comment, a member by association", "thani-sh-stranger", "MEMBER", false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rc.mayMention(tc.association, tc.author, &p, tc.reviewSurface); got != tc.want {
+				t.Fatalf("mayMention(%q, %q, reviewSurface=%t) = %t, want %t", tc.association, tc.author, tc.reviewSurface, got, tc.want)
 			}
 		})
 	}

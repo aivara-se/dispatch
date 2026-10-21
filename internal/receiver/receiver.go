@@ -94,6 +94,9 @@ type payload struct {
 		State             string `json:"state"`
 		Body              string `json:"body"`
 		AuthorAssociation string `json:"author_association"`
+		User              struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"review"`
 	Issue struct {
 		Number int `json:"number"`
@@ -115,6 +118,9 @@ type payload struct {
 	Comment struct {
 		Body              string `json:"body"`
 		AuthorAssociation string `json:"author_association"`
+		User              struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"comment"`
 	Sender struct {
 		Login string `json:"login"`
@@ -334,7 +340,8 @@ func merged(at json.RawMessage) bool {
 // reason leads the line; a mention's is its own. capped reports that the
 // round cap refused the review's own targets: a mention consults neither cap.
 func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approved, capped bool) {
-	body, association := mentionSource(rec, p)
+	body, association, author := mentionSource(rec, p)
+	reviewSurface := rec.Event == "pull_request_review" || rec.Event == "pull_request_review_comment"
 
 	var targets []target
 	if changes {
@@ -350,7 +357,8 @@ func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approv
 		})
 	}
 	named := mentionedLogins(body, rc.agents)
-	if mayMention(association) {
+	allowed := rc.mayMention(association, author, p, reviewSurface)
+	if allowed {
 		reason := fmt.Sprintf("Dispatch: mentioned on %s#%d", rec.Repository, rec.Number)
 		for _, login := range named {
 			targets = append(targets, target{login: login, reason: reason})
@@ -359,8 +367,8 @@ func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approv
 	if len(targets) == 0 {
 		rec.Decision = audit.Ignored
 		switch {
-		case len(named) > 0 && !mayMention(association):
-			rec.Why = fmt.Sprintf("author association %q may not summon an agent", association)
+		case len(named) > 0 && !allowed:
+			rec.Why = fmt.Sprintf("author %q with association %q may not summon an agent", author, association)
 		case capped:
 			rec.Why = fmt.Sprintf("the %d-round cap was reached", MaxRounds)
 		default:
@@ -375,13 +383,13 @@ func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approv
 	}
 }
 
-// mentionSource returns the text a delivery's mention is read from and the
-// association of its author.
-func mentionSource(rec *audit.Record, p *payload) (body, association string) {
+// mentionSource returns the text a delivery's mention is read from, along with
+// its author's association and login.
+func mentionSource(rec *audit.Record, p *payload) (body, association, author string) {
 	if rec.Event == "pull_request_review" {
-		return p.Review.Body, p.Review.AuthorAssociation
+		return p.Review.Body, p.Review.AuthorAssociation, p.Review.User.Login
 	}
-	return p.Comment.Body, p.Comment.AuthorAssociation
+	return p.Comment.Body, p.Comment.AuthorAssociation, p.Comment.User.Login
 }
 
 // wakeAll starts one run per configured login, once, skipping the actor, and
@@ -455,12 +463,24 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, targets []target, actor strin
 	return true, ""
 }
 
-// mayMention reports whether a comment's or review's author association may
-// summon an agent.
-func mayMention(association string) bool {
+// mayMention reports whether a delivery's author may summon an agent: by
+// association everywhere, and on a review surface also when they are the pull
+// request's author or one of the logins the service is configured to run.
+func (rc *Receiver) mayMention(association, author string, p *payload, reviewSurface bool) bool {
 	switch association {
 	case "OWNER", "MEMBER", "COLLABORATOR":
 		return true
+	}
+	if !reviewSurface || author == "" {
+		return false
+	}
+	if author == p.PullRequest.User.Login {
+		return true
+	}
+	for login := range rc.agents {
+		if strings.EqualFold(login, author) {
+			return true
+		}
 	}
 	return false
 }

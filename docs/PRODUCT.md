@@ -42,7 +42,7 @@ The cap here is five wakes per pull request, and five per repository and branch,
 
 When a comment on an issue or a pull request is created, a review is submitted, or an inline review comment is created, the service wakes each configured agent whose exact `@login` the text names ([`016`](adrs/016-a-mention-reads-the-reviews-own-surfaces.md)). The match is case-insensitive and bounded: `@thani-sh-mama.` matches, `@thani-sh-mama-2` and `x@thani-sh-mama` do not. An agent named three times is woken once, however often it is named.
 
-Only the repository's owner, a member of the organisation or a collaborator may summon an agent. A comment from a contributor, a first-time commenter or a stranger wakes nobody, whatever it says. The body is read only to find a configured login in it, and no text from it reaches the reason or the log.
+Only the repository's owner, a member of the organisation or a collaborator may summon an agent from a comment. A comment from a contributor, a first-time commenter or a stranger wakes nobody, whatever it says. On the two review surfaces GitHub reports that association differently — a member's review can arrive as `CONTRIBUTOR` — so there a review may also summon when its author is the pull request's author or a login the service is configured to run ([`021`](adrs/021-a-reviews-mention-is-trusted-by-its-author.md)). The text is read only to find a configured login in it, and no text from it reaches the reason or the log.
 
 A review that requests changes has two targets in one delivery: the author it wakes ([`006`](adrs/006-the-review-loop.md)), and any configured login its body names. Both start their own run with their own reason and are recorded on one line.
 
@@ -92,7 +92,7 @@ Known, and deliberately not handled in this version. Each is a wake that does no
 - **An approval on a draft, on a closed or merged pull request, or on one armed for auto-merge.** Nobody is woken, which is the case an unarmed approval on an open pull request is not.
 - **A review edited to approved.** Only a submitted review acts, so the edit wakes nobody.
 - **A mention in a code block, a quotation or a sentence about an agent.** It matches: the service does not read Markdown, and a parser would be a larger thing than this service.
-- **A mention from a bot, a contributor or a first-time commenter.** The association is not the owner's, a member's or a collaborator's, so it wakes nobody even when the login it names is configured.
+- **A mention from a bot, a contributor or a first-time commenter.** The association is not the owner's, a member's or a collaborator's, and on a review surface the author is neither the pull request's author nor a login the service is configured to run, so it wakes nobody even when the login it names is configured.
 - **A mention in a commit comment or in a pull request's or an issue's description.** A comment, a submitted review and an inline review comment are read; nothing else reaches the matcher.
 - **A review and its inline comments are separate deliveries.** A review naming an agent in both its body and a comment starts two runs, and several comments naming the same agent start one run each.
 - **Two approvals dismissed by one push.** The delivery id is the unit of dedupe and the review is the unit of a dismissal, so the author is woken twice.

@@ -205,6 +205,36 @@ func commentBody(number int, action, association, sender, text string) string {
 	}`, action, testRepo, number, text, association, sender)
 }
 
+// reviewSurfaceBody is a pull_request_review delivery that carries the review's
+// text and its author's association.
+func reviewSurfaceBody(action, state, association, sender, author, text string) string {
+	return fmt.Sprintf(`{
+		"action": %q,
+		"repository": {"full_name": %q},
+		"pull_request": {
+			"number": 105,
+			"state": "open",
+			"draft": false,
+			"auto_merge": null,
+			"user": {"login": %q}
+		},
+		"review": {"state": %q, "body": %q, "author_association": %q},
+		"sender": {"login": %q}
+	}`, action, testRepo, author, state, text, association, sender)
+}
+
+// reviewCommentBody is a pull_request_review_comment delivery on pull request
+// 105.
+func reviewCommentBody(action, association, sender, text string) string {
+	return fmt.Sprintf(`{
+		"action": %q,
+		"repository": {"full_name": %q},
+		"pull_request": {"number": 105},
+		"comment": {"body": %q, "author_association": %q},
+		"sender": {"login": %q}
+	}`, action, testRepo, text, association, sender)
+}
+
 // reviewDelivery is a pull_request_review delivery on pull request 105 whose
 // action and review state the caller varies.
 type reviewDelivery struct {
@@ -846,6 +876,209 @@ func TestRedMainCapIsSeparateFromThePullRequestCap(t *testing.T) {
 	})
 }
 
+// TestReviewBodyMentionWakesAgent pins 016's first new surface: a submitted
+// review's body, read with the review's own association.
+func TestReviewBodyMentionWakesAgent(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewSurfaceBody("submitted", "commented", "MEMBER", "thani-sh", "thani-sh-mama",
+		"@thani-sh-meme, this line is off; @thani-sh-meme again.")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := []call{{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}}
+	if len(runner.calls) != len(want) || runner.calls[0] != want[0] {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Profile != "meme" || got.Number != 105 {
+		t.Fatalf("record = %+v, want started on 105 by meme", got)
+	}
+}
+
+// TestReviewCommentMentionWakesAgent pins the second: an inline review
+// comment's body, read with the comment's own association.
+func TestReviewCommentMentionWakesAgent(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewCommentBody("created", "COLLABORATOR", "thani-sh", "@thani-sh-meme is this covered?")
+
+	if w := post(rc, "pull_request_review_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	if got := recorder.records[0]; got.Decision != audit.Started || got.Number != 105 {
+		t.Fatalf("record = %+v, want started on 105", got)
+	}
+}
+
+// TestChangesRequestedAndMentionAreOneLine pins 016's two targets in one
+// delivery: the author the review requests changes from, and the login its body
+// names, recorded once with the profiles joined.
+func TestChangesRequestedAndMentionAreOneLine(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama",
+		"@thani-sh-meme, this line is off.")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := []call{
+		{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105"},
+		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	for i := range want {
+		if runner.calls[i] != want[i] {
+			t.Fatalf("calls[%d] = %+v, want %+v", i, runner.calls[i], want[i])
+		}
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("audit records = %d, want one line", len(recorder.records))
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Profile != "mama,meme" {
+		t.Fatalf("record = %+v, want started by mama,meme", got)
+	}
+	if got.Reason != "Dispatch: changes requested on aivara-se/dispatch#105" {
+		t.Fatalf("recorded reason = %q, want the review's", got.Reason)
+	}
+}
+
+// TestAuthorMentionedInTheirOwnReviewWakesOnce pins the dedupe across the two
+// target lists: the author a review targets is not woken twice when the body
+// also names them.
+func TestAuthorMentionedInTheirOwnReviewWakesOnce(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama",
+		"@thani-sh-mama, this line is off.")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	if got := recorder.records[0]; got.Profile != "mama" {
+		t.Fatalf("record = %+v, want one run for mama", got)
+	}
+}
+
+// TestUnarmedApprovalAndMentionAreOneLine pins that 012's wake survives 016's
+// widening: an approval that lands nothing still wakes its author, beside the
+// login its body names.
+func TestUnarmedApprovalAndMentionAreOneLine(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewSurfaceBody("submitted", "approved", "OWNER", "thani-sh", "thani-sh-mama",
+		"@thani-sh-meme, thanks.")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := []call{
+		{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105"},
+		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	for i := range want {
+		if runner.calls[i] != want[i] {
+			t.Fatalf("calls[%d] = %+v, want %+v", i, runner.calls[i], want[i])
+		}
+	}
+	if got := recorder.records[0]; got.Profile != "mama,meme" || got.Decision != audit.Started {
+		t.Fatalf("record = %+v, want started by mama,meme", got)
+	}
+}
+
+func TestReviewMentionNeedsAnAssociation(t *testing.T) {
+	cases := []struct {
+		name  string
+		event string
+		body  string
+	}{
+		{"review", "pull_request_review", reviewSurfaceBody("submitted", "commented", "CONTRIBUTOR", "thani-sh", "thani-sh-mama", "@thani-sh-meme")},
+		{"review comment", "pull_request_review_comment", reviewCommentBody("created", "NONE", "thani-sh", "@thani-sh-meme")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+
+			if w := post(rc, tc.event, "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, "association") {
+				t.Fatalf("record = %+v, want ignored for the association", got)
+			}
+		})
+	}
+}
+
+func TestReviewSurfacesIgnoreOtherActions(t *testing.T) {
+	cases := []struct {
+		name  string
+		event string
+		body  string
+	}{
+		{"edited review", "pull_request_review", reviewSurfaceBody("edited", "commented", "MEMBER", "thani-sh", "thani-sh-mama", "@thani-sh-meme")},
+		{"edited review comment", "pull_request_review_comment", reviewCommentBody("edited", "MEMBER", "thani-sh", "@thani-sh-meme")},
+		{"deleted review comment", "pull_request_review_comment", reviewCommentBody("deleted", "MEMBER", "thani-sh", "@thani-sh-meme")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+
+			if w := post(rc, tc.event, "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, "is not a delivery that acts") {
+				t.Fatalf("record = %+v, want ignored for the action", got)
+			}
+		})
+	}
+}
+
+// TestReviewMentionSkipsItsActor pins the self-actor rule on the new surfaces:
+// a review whose author names themselves wakes nobody.
+func TestReviewMentionSkipsItsActor(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewSurfaceBody("submitted", "commented", "MEMBER", "thani-sh-meme", "thani-sh-mama", "@thani-sh-meme")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runs started = %d, want 0", len(runner.calls))
+	}
+	if got := recorder.records[0]; got.Decision != audit.Ignored || !strings.Contains(got.Why, "actor") {
+		t.Fatalf("record = %+v, want ignored for the actor", got)
+	}
+}
+
 func TestMentionWakesEachAgentOnce(t *testing.T) {
 	runner := &stubRunner{}
 	rc, recorder := newReceiver(runner)
@@ -1124,11 +1357,11 @@ func TestApprovalWakesNobody(t *testing.T) {
 		author    string
 		why       string
 	}{
-		{"armed", "submitted", "approved", "open", false, `{"merge_method": "squash"}`, "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"draft", "submitted", "approved", "open", true, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"closed", "submitted", "approved", "closed", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"merged", "submitted", "approved", "merged", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
-		{"commented review", "submitted", "commented", "open", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
+		{"armed", "submitted", "approved", "open", false, `{"merge_method": "squash"}`, "thani-sh-meme", "thani-sh-mama", "no configured agent was mentioned"},
+		{"draft", "submitted", "approved", "open", true, "null", "thani-sh-meme", "thani-sh-mama", "no configured agent was mentioned"},
+		{"closed", "submitted", "approved", "closed", false, "null", "thani-sh-meme", "thani-sh-mama", "no configured agent was mentioned"},
+		{"merged", "submitted", "approved", "merged", false, "null", "thani-sh-meme", "thani-sh-mama", "no configured agent was mentioned"},
+		{"commented review", "submitted", "commented", "open", false, "null", "thani-sh-meme", "thani-sh-mama", "no configured agent was mentioned"},
 		{"edited approval", "edited", "approved", "open", false, "null", "thani-sh-meme", "thani-sh-mama", "is not a delivery that acts"},
 		{"unconfigured author", "submitted", "approved", "open", false, "null", "thani-sh-meme", "thani-sh-missing", "not a configured agent"},
 		{"actor is the author", "submitted", "approved", "open", false, "null", "thani-sh-meme", "thani-sh-meme", "actor"},
@@ -1764,6 +1997,22 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"sender": {"login": "thani-sh"}
 	}`, sentinel, sentinel, sentinel, sentinel+" @thani-sh-meme "+sentinel)
 
+	reviewMention := fmt.Sprintf(`{
+		"action": "submitted",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"pull_request": {
+			"number": 105,
+			"state": "open",
+			"draft": false,
+			"auto_merge": null,
+			"title": %q,
+			"body": %q,
+			"user": {"login": "thani-sh-mama"}
+		},
+		"review": {"state": "commented", "body": %q, "author_association": "MEMBER"},
+		"sender": {"login": "thani-sh"}
+	}`, sentinel, sentinel, sentinel, sentinel+" @thani-sh-meme "+sentinel)
+
 	unarmedApproval := fmt.Sprintf(`{
 		"action": "submitted",
 		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
@@ -1828,6 +2077,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"mentioned", "issue_comment", mentioned, "meme",
 			"Dispatch: mentioned on aivara-se/dispatch#124",
+		},
+		{
+			"mentioned in a review", "pull_request_review", reviewMention, "meme",
+			"Dispatch: mentioned on aivara-se/dispatch#105",
 		},
 		{
 			"approved but not armed", "pull_request_review", unarmedApproval, "mama",

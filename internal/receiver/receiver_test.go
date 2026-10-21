@@ -235,6 +235,18 @@ func reviewCommentBody(action, association, sender, text string) string {
 	}`, action, testRepo, text, association, sender)
 }
 
+// dismissedBody is a dismissed pull_request_review delivery on pull request
+// 105.
+func dismissedBody(draft bool, state, mergedAt, sender, author string) string {
+	return fmt.Sprintf(`{
+		"action": "dismissed",
+		"repository": {"full_name": %q},
+		"pull_request": {"number": 105, "state": %q, "draft": %t, "merged_at": %s, "user": {"login": %q}},
+		"review": {"state": "dismissed"},
+		"sender": {"login": %q}
+	}`, testRepo, state, draft, mergedAt, author, sender)
+}
+
 // reviewDelivery is a pull_request_review delivery on pull request 105 whose
 // action and review state the caller varies.
 type reviewDelivery struct {
@@ -1387,6 +1399,104 @@ func TestApprovalWakesNobody(t *testing.T) {
 	}
 }
 
+func TestDismissedReviewWakesAuthor(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := dismissedBody(false, "open", "null", "thani-sh-meme", "thani-sh-mama")
+
+	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "mama", reason: "Dispatch: approval dismissed on aivara-se/dispatch#105"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	if got := recorder.records[0]; got.Decision != audit.Started || got.Number != 105 {
+		t.Fatalf("record = %+v, want started on 105", got)
+	}
+}
+
+func TestDismissedReviewWakesNobody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		why  string
+	}{
+		{"draft", dismissedBody(true, "open", "null", "thani-sh-meme", "thani-sh-mama"), "is not a delivery that acts"},
+		{"closed", dismissedBody(false, "closed", "null", "thani-sh-meme", "thani-sh-mama"), "is not a delivery that acts"},
+		{"merged state", dismissedBody(false, "merged", "null", "thani-sh-meme", "thani-sh-mama"), "is not a delivery that acts"},
+		{"merged at", dismissedBody(false, "open", `"2026-10-20T10:00:00Z"`, "thani-sh-meme", "thani-sh-mama"), "is not a delivery that acts"},
+		{"unconfigured author", dismissedBody(false, "open", "null", "thani-sh-meme", "thani-sh-missing"), "not a configured agent"},
+		{"actor is the author", dismissedBody(false, "open", "null", "thani-sh-meme", "thani-sh-meme"), "actor"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &stubRunner{}
+			rc, recorder := newReceiver(runner)
+
+			if w := post(rc, "pull_request_review", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202", w.Code)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runs started = %d, want 0", len(runner.calls))
+			}
+			got := recorder.records[0]
+			if got.Decision != audit.Ignored || !strings.Contains(got.Why, tc.why) {
+				t.Fatalf("record = %+v, want ignored because %q", got, tc.why)
+			}
+		})
+	}
+}
+
+// TestDismissalConsultsNeitherCap pins 017's "no round and neither cap": a pull
+// request at ten rounds and five failed checks still wakes its author on a
+// dismissal, and the dismissal spends no round.
+func TestDismissalConsultsNeitherCap(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+
+	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
+	for i := 1; i <= MaxRounds; i++ {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	failure := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
+	for i := 1; i <= MaxFailures; i++ {
+		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), failure, sign(failure)); w.Code != http.StatusAccepted {
+			t.Fatalf("failure %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if len(runner.calls) != MaxRounds+MaxFailures {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+MaxFailures)
+	}
+
+	dismissal := dismissedBody(false, "open", "null", "thani-sh-meme", "thani-sh-mama")
+	if w := post(rc, "pull_request_review", "dismissal", dismissal, sign(dismissal)); w.Code != http.StatusAccepted {
+		t.Fatalf("dismissal: status = %d, want 202", w.Code)
+	}
+	if len(runner.calls) != MaxRounds+MaxFailures+1 {
+		t.Fatalf("runs started = %d, want %d: the dismissal was refused", len(runner.calls), MaxRounds+MaxFailures+1)
+	}
+	want := call{profile: "mama", reason: "Dispatch: approval dismissed on aivara-se/dispatch#105"}
+	if got := runner.calls[len(runner.calls)-1]; got != want {
+		t.Fatalf("dismissal call = %+v, want %+v", got, want)
+	}
+
+	// The dismissal spent no round: the eleventh review is still refused.
+	if w := post(rc, "pull_request_review", "r11", round, sign(round)); w.Code != http.StatusAccepted {
+		t.Fatalf("eleventh round: status = %d, want 202", w.Code)
+	}
+	last := recorder.records[len(recorder.records)-1]
+	if last.Decision != audit.Ignored || !strings.Contains(last.Why, "cap") {
+		t.Fatalf("record = %+v, want ignored for the round cap", last)
+	}
+	if len(runner.calls) != MaxRounds+MaxFailures+1 {
+		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+MaxFailures+1)
+	}
+}
+
 func TestReadyForReviewWakesReviewers(t *testing.T) {
 	runner := &stubRunner{}
 	rc, recorder := newReceiver(runner)
@@ -2030,6 +2140,22 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"sender": {"login": "thani-sh-meme"}
 	}`, sentinel, sentinel, sentinel, sentinel, sentinel)
 
+	dismissedReview := fmt.Sprintf(`{
+		"action": "dismissed",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"pull_request": {
+			"number": 105,
+			"state": "open",
+			"draft": false,
+			"merged_at": null,
+			"title": %q,
+			"body": %q,
+			"user": {"login": "thani-sh-mama"}
+		},
+		"review": {"state": "dismissed", "body": %q},
+		"sender": {"login": "thani-sh-meme"}
+	}`, sentinel, sentinel, sentinel, sentinel)
+
 	readyForReview := fmt.Sprintf(`{
 		"action": "ready_for_review",
 		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
@@ -2085,6 +2211,10 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"approved but not armed", "pull_request_review", unarmedApproval, "mama",
 			"Dispatch: approved but not armed on aivara-se/dispatch#105",
+		},
+		{
+			"review dismissed", "pull_request_review", dismissedReview, "mama",
+			"Dispatch: approval dismissed on aivara-se/dispatch#105",
 		},
 		{
 			"ready for review", "pull_request", readyForReview, "meme",

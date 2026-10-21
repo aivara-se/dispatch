@@ -78,6 +78,7 @@ type payload struct {
 		Number    int             `json:"number"`
 		State     string          `json:"state"`
 		Draft     bool            `json:"draft"`
+		MergedAt  json.RawMessage `json:"merged_at"`
 		AutoMerge json.RawMessage `json:"auto_merge"`
 		User      struct {
 			Login string `json:"login"`
@@ -194,8 +195,10 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		rec.Event == "pull_request_review_comment" && p.Action == "created"
 	approved := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "approved" &&
 		p.PullRequest.State == "open" && !p.PullRequest.Draft && unarmed(p.PullRequest.AutoMerge)
+	dismissed := rec.Event == "pull_request_review" && p.Action == "dismissed" &&
+		p.PullRequest.State == "open" && !p.PullRequest.Draft && !merged(p.PullRequest.MergedAt)
 	ready := rec.Event == "pull_request" && p.Action == "ready_for_review"
-	if !review && !changes && !assigned && !failed && !redMain && !mentioned && !approved && !ready {
+	if !review && !changes && !assigned && !failed && !redMain && !mentioned && !approved && !dismissed && !ready {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("event %q with action %q is not a delivery that acts", rec.Event, p.Action)
 		return
@@ -259,6 +262,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	case redMain:
 		login = p.WorkflowRun.Actor.Login
 		reason = fmt.Sprintf("Dispatch: checks failed on %s@%s", rec.Repository, p.WorkflowRun.HeadBranch)
+	case dismissed:
+		login = p.PullRequest.User.Login
+		reason = fmt.Sprintf("Dispatch: approval dismissed on %s#%d", rec.Repository, rec.Number)
 	default:
 		if p.Assignee == nil || p.Assignee.Login == "" {
 			rec.Decision = audit.Ignored
@@ -315,6 +321,11 @@ func (rc *Receiver) exit(delivery, profile string) func(int) {
 // unarmed reports whether a pull request's auto_merge is null.
 func unarmed(autoMerge json.RawMessage) bool {
 	return len(autoMerge) == 0 || string(autoMerge) == "null"
+}
+
+// merged reports whether a pull request's merged_at names a moment.
+func merged(at json.RawMessage) bool {
+	return len(at) > 0 && string(at) != "null"
 }
 
 // decideMention wakes each configured login a comment or a review names, and

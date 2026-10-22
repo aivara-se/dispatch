@@ -1,6 +1,6 @@
 # Dispatch: systems
 
-This document describes v1.14; the flows and their acceptance are [PRODUCT](PRODUCT.md).
+This document describes v1.15; the flows and their acceptance are [PRODUCT](PRODUCT.md).
 
 ## Where it runs
 
@@ -30,19 +30,19 @@ The unit, the environment file and the proxy site are `README.md` (*Run it on th
 5. The delivery id is checked against the in-memory cache. A delivery already seen is accepted and starts nothing.
 6. For the review flows, the round count decides whether the delivery may act: at ten it wakes nobody, and below ten a `changes_requested` review adds one ([`007`](adrs/007-the-review-cap.md)). A delivery with a mention is not refused by that count: it wakes the logins its text names and loses only the review's own target. A failed check keeps a count of five per pull request ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)), and one of five per repository and branch ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)); each is checked before the wake and advanced only when a run starts. Every count is in memory. An assignment, an approval, a mention, a dismissal and a ready-for-review keep no count and consult none.
 7. The logins to wake are matched against the configured agents: the requested reviewer, the pull request's author, the delivery's assignee, the run's actor, the logins a comment or a review names, or the reviewers a pull request still requests. A team entry is never resolved, so it wakes nobody. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken, except the actor of a failed run, who is the one it is news to.
-8. Each matched profile's agent is started, with the reason ([`003`](adrs/003-starting-a-run.md)). One delivery that wakes several agents starts one run per profile and records them on one line, comma-separated.
-9. An audit line is appended whatever happened ([`005`](adrs/005-the-audit-record.md)). A run that ends non-zero appends a line of its own ([`015`](adrs/015-the-audit-records-a-runs-exit.md)), and each boot appends one ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
+8. Each matched profile's agent is started, with the reason ([`003`](adrs/003-starting-a-run.md)) — unless that profile already has a run in flight on the same object, in which case the delivery is held for it ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). One delivery that wakes several agents starts one run per profile and records them on one line, comma-separated.
+9. An audit line is appended whatever happened ([`005`](adrs/005-the-audit-record.md)). A held delivery's line records `held` and the key it waits on, and the follow-up its run's exit starts appends a line of its own, carrying the held delivery's id. A run that ends non-zero appends a line of its own ([`015`](adrs/015-the-audit-records-a-runs-exit.md)), and each boot appends one ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
 
 The answers are the service's own: `401` a missing or non-verifying signature, `400` a body it will not read, `202` every delivery that verifies — acted on or ignored. The audit line, not the status, tells those two apart.
 
 ## Starting a run
 
-The requirement is that no wake is delayed. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>" --source dispatch`, launched by the service ([`003`](adrs/003-starting-a-run.md), [`019`](adrs/019-every-run-is-tagged-dispatch.md)).
+The requirement is that no wake is lost. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>" --source dispatch`, launched by the service ([`003`](adrs/003-starting-a-run.md), [`019`](adrs/019-every-run-is-tagged-dispatch.md)).
 
-- **No serialisation.** Every wake starts a run; nothing queues and nothing is held back, so an agent may have several runs at once.
-- **No tracking.** The child is waited on from its own goroutine, its exit status is read once, and nothing about the run is stored: no run table, no lifetime bound, nothing reconciled at boot ([`015`](adrs/015-the-audit-records-a-runs-exit.md)). A run that exits non-zero appends a line of its own; one that exits zero appends nothing.
+- **One run in flight per object and profile.** The key is `<repository>#<number>`, or `<repository>@<branch>` for a default-branch run, paired with the local profile. A delivery that lands on a live key starts nothing: it is held, and one follow-up starts when that run exits, carrying the most recent held delivery's reason ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). At most one delivery is held per key and a later one replaces it, so a burst becomes one run. Nothing is serialised more widely: another pull request, or another agent on the same one, still starts immediately.
+- **No tracking.** The child is waited on from its own goroutine, its exit status is read once, and nothing about the run is stored: no run table, no lifetime bound, nothing reconciled at boot ([`015`](adrs/015-the-audit-records-a-runs-exit.md)). The exit also releases the key the run held, which is what starts the follow-up. A run that exits non-zero appends a line of its own; one that exits zero appends nothing.
 - **The binary is absolute**, because a user unit's `PATH` does not resolve the bare command ([`004`](adrs/004-configuration.md)).
-- **When it cannot start**, the audit line records it and the delivery is still answered `202`. The service keeps no queue, so that wake is lost rather than retried.
+- **When it cannot start**, the audit line records it and the delivery is still answered `202`. The service keeps no queue, so that wake is lost rather than retried, and the key it would have held stays free.
 
 The argv is a contract with another program — `--profile`/`-p`, `chat -q` and `--source` are Hermes' own. A test can pin the argv the service builds; only a hand check on the host can show that Hermes still accepts it.
 
@@ -75,8 +75,8 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 ## Storage
 
-- **In memory, and only there:** the delivery-id cache for the TTL `002` fixes, each pull request's round count ([`007`](adrs/007-the-review-cap.md)), its failed-check count ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)) and each repository and branch's failed-check count ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)), and the configuration and secret resolved at boot.
-- **On disk:** the audit file alone — one JSON Lines line per delivery, one per run that ended non-zero, and one per boot, appended and size-rotated ([`005`](adrs/005-the-audit-record.md), [`015`](adrs/015-the-audit-records-a-runs-exit.md), [`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
+- **In memory, and only there:** the delivery-id cache for the TTL `002` fixes, each pull request's round count ([`007`](adrs/007-the-review-cap.md)), its failed-check count ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)) and each repository and branch's failed-check count ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)), one key per live run and the single delivery held for it ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)), and the configuration and secret resolved at boot.
+- **On disk:** the audit file alone — one JSON Lines line per delivery, one per run that ended non-zero, one per boot, and one per follow-up that started, appended and size-rotated ([`005`](adrs/005-the-audit-record.md), [`015`](adrs/015-the-audit-records-a-runs-exit.md), [`018`](adrs/018-the-services-boot-reaches-the-audit.md), [`021`](adrs/021-one-run-per-pull-request-per-agent.md)).
 - **Nothing else.** No database, no queue, no ordering of events, and no state reconciled after a restart.
 
 ## Failure modes
@@ -86,6 +86,8 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 - **A delivery that is not ours** — another event, action, review state or author association: `202`, and nobody is woken.
 - **A delivery with nobody to wake** — a team in place of a login, a comment, review or review comment whose author is not the owner, a member or a collaborator, an unconfigured login: `202`, and the line names which of them it was. An approval on a draft or an armed pull request, and a dismissal on a draft, a closed or a merged one, is refused the same way, but its line names no condition: it is logged as an event and an action that do not act.
 - **A repeat** — `202`, and nobody is woken; the line shows it was seen.
+- **A delivery behind a live key** — `202`, and nothing starts yet; its line reads `held` and names the key, and the follow-up its run's exit starts appends a line of its own with the same delivery id.
+- **A run that never exits** — its key stays held until the process restarts, so that object's wakes for that profile stop; the held line with no follow-up after it is the trace.
 - **A pull request at either cap, or a branch at its cap** — `202`, and nobody is woken; the line shows which cap was reached.
 - **A run that cannot start** — recorded on the line, answered `202`, not retried.
 - **A run that ends non-zero** — a line of its own, appended when the child exits; the delivery's answer went out before it started, so nothing changes and nothing is retried.
@@ -93,9 +95,7 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 ## Planned, not built
 
-Every list above describes v1.14; two things are decided and unbuilt.
-
-**One run per pull request per agent** ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). A gate keyed `<repository>#<number>` and profile — `<repository>@<branch>` and profile for a default-branch run — holds at most one delivery per key. A delivery that lands while that key's run is live starts nothing; the run in flight's exit starts one follow-up carrying the most recent held delivery's reason, and the key is released on that exit. The audit gains the decision `held` and a line for the follow-up's start, paired with the delivery's own line by delivery id. The *Starting a run* section above still describes v1.14, which serialises nothing.
+Every list above describes v1.15; one thing is decided and unbuilt.
 
 **Observability, not a version** ([`020`](adrs/020-telemetry-leaves-through-a-collector.md)). The service serves `GET /metrics` in Prometheus text on `127.0.0.1:9464` — `dispatch_deliveries_total{event,decision}` and a `dispatch_delivery_duration_seconds` histogram — from `internal/metrics`, standard library only. A stock OpenTelemetry Collector on the host scrapes it and exports OTLP to whichever provider the operator configures; nothing in this repository builds, configures or restarts the collector. It adds no dependency, no configuration field, no audit line and no span.
 
@@ -107,6 +107,6 @@ go vet ./...
 go test ./...
 ```
 
-The tests must cover: the signature refused before parsing, the event and review-state filter, the assignment filter on issues and on pull requests, the failed-check filter on a pull request and on the default branch with its own cap, the dedup, the ten-round cap and the wake it refuses, the mention match on all three surfaces and its association guard, the unarmed approval and the states that refuse it, the dismissal and the states that refuse it, the ready-for-review reviewer set, the configuration loader's refusals, the run line for a non-zero exit and the absence of one for a zero exit, the boot line, and one signed POST per flow that starts a run. The reason tests use a fixture whose every text field is a sentinel — no sentinel reaches the argv — and the argv is a fixed sentence above. A fake `hermes` on the configured path captures the argv.
+The tests must cover: the signature refused before parsing, the event and review-state filter, the assignment filter on issues and on pull requests, the failed-check filter on a pull request and on the default branch with its own cap, the dedup, the ten-round cap and the wake it refuses, the mention match on all three surfaces and its association guard, the unarmed approval and the states that refuse it, the dismissal and the states that refuse it, the ready-for-review reviewer set, the gate that holds a delivery behind a live key, the follow-up its exit starts, the replacement of a held delivery, the keys that stay concurrent, the configuration loader's refusals, the run line for a non-zero exit and the absence of one for a zero exit, the boot line, and one signed POST per flow that starts a run. The reason tests use a fixture whose every text field is a sentinel — no sentinel reaches the argv — and the argv is a fixed sentence above. A fake `hermes` on the configured path captures the argv.
 
 What no test can reach: that Hermes still accepts the argv, and a real delivery through GitHub to a real agent run. Both are checked by hand on the host.

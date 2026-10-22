@@ -581,6 +581,49 @@ func TestExitWithNothingHeldFreesTheKey(t *testing.T) {
 	}
 }
 
+// TestCapsCountFollowUpRuns pins that the run a follow-up starts spends the cap
+// its delivery was held under: the cap counts runs, not deliveries that started
+// one ([`021`](docs/adrs/021-one-run-per-pull-request-per-agent.md)).
+func TestCapsCountFollowUpRuns(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"failed check", workflowRunBody("completed", "failure", "thani-sh-meme", 105)},
+		{"red main", pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &liveRunner{}
+			rc, recorder := newReceiver(runner)
+
+			// Bursts of two: each burst's second delivery is answered `held` and
+			// started by the exit of the run before it, so a stream of them never
+			// spends the cap unless the follow-up does.
+			next := 0
+			for i := 1; i <= MaxFailures*2; i++ {
+				for _, delivery := range []string{fmt.Sprintf("d%da", i), fmt.Sprintf("d%db", i)} {
+					if w := post(rc, "workflow_run", delivery, tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+						t.Fatalf("%s: status = %d, want 202", delivery, w.Code)
+					}
+				}
+				if started := len(runner.started()); started > next {
+					runner.exit(next, 0)
+					next++
+				}
+			}
+
+			if got := len(runner.started()); got != MaxFailures {
+				t.Fatalf("runs started = %d, want %d", got, MaxFailures)
+			}
+			last := recorder.records[len(recorder.records)-1]
+			if last.Decision != audit.Ignored || !strings.Contains(last.Why, "cap") {
+				t.Fatalf("record = %+v, want ignored for the cap", last)
+			}
+		})
+	}
+}
+
 // TestTheGateIsPerObject pins that two pull requests of one agent do not wait on
 // each other.
 func TestTheGateIsPerObject(t *testing.T) {

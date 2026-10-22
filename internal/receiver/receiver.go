@@ -298,7 +298,15 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 	}
 	rec.Profile = profile
 	rec.Reason = reason
-	if free, replaced := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: reason}); !free {
+	spend := func() {
+		if failed {
+			rc.failures.add(pullRequestKey(rec.Repository, rec.Number))
+		}
+		if redMain {
+			rc.pushRuns.add(branchKey(rec.Repository, p.WorkflowRun.HeadBranch))
+		}
+	}
+	if free, replaced := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: reason, spend: spend}); !free {
 		rec.Decision = audit.Held
 		rec.Why = heldWhy(object, replaced)
 		return
@@ -310,12 +318,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		return
 	}
 	rec.Decision = audit.Started
-	if failed {
-		rc.failures.add(pullRequestKey(rec.Repository, rec.Number))
-	}
-	if redMain {
-		rc.pushRuns.add(branchKey(rec.Repository, p.WorkflowRun.HeadBranch))
-	}
+	spend()
 }
 
 // exit returns the callback a started run reports its exit through: a non-zero
@@ -334,15 +337,19 @@ func (rc *Receiver) exit(object, profile, delivery string) func(int) {
 	}
 }
 
-// followUp starts the one run a held delivery waits for. Its line carries the
-// held delivery's id, profile and reason, so a reader pairs it with the held
-// line; a follow-up that cannot start leaves the key free rather than held.
+// followUp starts the one run a held delivery waits for, and spends the cap the
+// delivery was held under — a run is a wake whether or not its delivery started
+// it. Its line carries the held delivery's id, profile and reason, so a reader
+// pairs it with the held line; a follow-up that cannot start leaves the key free
+// rather than held.
 func (rc *Receiver) followUp(object, profile string, d held) {
 	rec := audit.Record{Delivery: d.delivery, Profile: profile, Reason: d.reason, Decision: audit.Started}
 	if err := rc.runner.Start(profile, d.reason, rc.exit(object, profile, d.delivery)); err != nil {
 		rc.gate.drop(object, profile)
 		rec.Decision = audit.StartFailed
 		rec.Why = err.Error()
+	} else if d.spend != nil {
+		d.spend()
 	}
 	if err := rc.audit.Append(rec); err != nil {
 		log.Printf("dispatch: audit: %v", err)
@@ -375,6 +382,9 @@ func newGate() *gate {
 type held struct {
 	delivery string
 	reason   string
+	// spend records the wake's cost in the cap it was held under, and is nil for
+	// flows no cap counts.
+	spend func()
 }
 
 // hold claims the key for a run and reports whether it was free. When it was

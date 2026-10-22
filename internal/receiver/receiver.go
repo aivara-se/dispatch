@@ -48,6 +48,7 @@ type Receiver struct {
 	runner   Runner
 	audit    Recorder
 	seen     *seen
+	gate     *gate
 	rounds   *counter
 	failures *counter
 	pushRuns *counter
@@ -62,6 +63,7 @@ func New(secret []byte, agents map[string]string, runner Runner, recorder Record
 		runner:   runner,
 		audit:    recorder,
 		seen:     newSeen(DedupTTL, time.Now),
+		gate:     newGate(),
 		rounds:   newCounter(MaxRounds),
 		failures: newCounter(MaxFailures),
 		pushRuns: newCounter(MaxFailures),
@@ -290,9 +292,19 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		return
 	}
 
+	object := pullRequestKey(rec.Repository, rec.Number)
+	if redMain {
+		object = branchKey(rec.Repository, p.WorkflowRun.HeadBranch)
+	}
 	rec.Profile = profile
 	rec.Reason = reason
-	if err := rc.runner.Start(profile, reason, rc.exit(rec.Delivery, profile)); err != nil {
+	if free, replaced := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: reason}); !free {
+		rec.Decision = audit.Held
+		rec.Why = heldWhy(object, replaced)
+		return
+	}
+	if err := rc.runner.Start(profile, reason, rc.exit(object, profile, rec.Delivery)); err != nil {
+		rc.gate.drop(object, profile)
 		rec.Decision = audit.StartFailed
 		rec.Why = err.Error()
 		return
@@ -307,15 +319,119 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 }
 
 // exit returns the callback a started run reports its exit through: a non-zero
-// status appends the run's own line, and a zero status appends nothing.
-func (rc *Receiver) exit(delivery, profile string) func(int) {
+// status appends the run's own line, and the key the run held is released,
+// starting the one delivery that was held for it.
+func (rc *Receiver) exit(object, profile, delivery string) func(int) {
 	return func(code int) {
-		if code == 0 {
-			return
+		if code != 0 {
+			if err := rc.audit.Append(audit.Record{Delivery: delivery, Profile: profile, Exit: code}); err != nil {
+				log.Printf("dispatch: audit: %v", err)
+			}
 		}
-		if err := rc.audit.Append(audit.Record{Delivery: delivery, Profile: profile, Exit: code}); err != nil {
-			log.Printf("dispatch: audit: %v", err)
+		if next := rc.gate.release(object, profile); next != nil {
+			rc.followUp(object, profile, *next)
 		}
+	}
+}
+
+// followUp starts the one run a held delivery waits for. Its line carries the
+// held delivery's id, profile and reason, so a reader pairs it with the held
+// line; a follow-up that cannot start leaves the key free rather than held.
+func (rc *Receiver) followUp(object, profile string, d held) {
+	rec := audit.Record{Delivery: d.delivery, Profile: profile, Reason: d.reason, Decision: audit.Started}
+	if err := rc.runner.Start(profile, d.reason, rc.exit(object, profile, d.delivery)); err != nil {
+		rc.gate.drop(object, profile)
+		rec.Decision = audit.StartFailed
+		rec.Why = err.Error()
+	}
+	if err := rc.audit.Append(rec); err != nil {
+		log.Printf("dispatch: audit: %v", err)
+	}
+}
+
+// heldWhy is a held delivery's line: the key it waits on, and the delivery it
+// replaced when an earlier one was already held there.
+func heldWhy(object string, replaced *held) string {
+	if replaced == nil {
+		return fmt.Sprintf("held for %s", object)
+	}
+	return fmt.Sprintf("held for %s, replacing delivery %s", object, replaced.delivery)
+}
+
+// gate holds at most one delivery per object and profile, for as long as that
+// key's run is live ([`021`](docs/adrs/021-one-run-per-pull-request-per-agent.md)).
+// A key's presence means a run is going; a non-nil delivery under it is the one
+// waiting for that run's exit. Nothing here describes the run itself.
+type gate struct {
+	mu   sync.Mutex
+	live map[string]map[string]*held
+}
+
+func newGate() *gate {
+	return &gate{live: make(map[string]map[string]*held)}
+}
+
+// held is one delivery waiting for its key's run to exit.
+type held struct {
+	delivery string
+	reason   string
+}
+
+// hold claims the key for a run and reports whether it was free. When it was
+// not, d replaces whatever was held there and the replaced delivery is
+// returned, nil when the earlier one was only running.
+func (g *gate) hold(object, profile string, d held) (free bool, replaced *held) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	profiles, ok := g.live[object]
+	if !ok {
+		profiles = make(map[string]*held)
+		g.live[object] = profiles
+	}
+	if earlier, running := profiles[profile]; running {
+		profiles[profile] = &d
+		return false, earlier
+	}
+	profiles[profile] = nil
+	return true, nil
+}
+
+// release clears the key and returns the delivery held for it, if any. A key
+// with a held delivery stays claimed, because that delivery's follow-up run now
+// owns it.
+func (g *gate) release(object, profile string) *held {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	profiles, ok := g.live[object]
+	if !ok {
+		return nil
+	}
+	d, ok := profiles[profile]
+	if !ok {
+		return nil
+	}
+	if d == nil {
+		delete(profiles, profile)
+	} else {
+		profiles[profile] = nil
+	}
+	if len(profiles) == 0 {
+		delete(g.live, object)
+	}
+	return d
+}
+
+// drop frees the key whatever is held for it, for a run that never started.
+func (g *gate) drop(object, profile string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	profiles, ok := g.live[object]
+	if !ok {
+		return
+	}
+	delete(profiles, profile)
+	if len(profiles) == 0 {
+		delete(g.live, object)
 	}
 }
 
@@ -369,7 +485,7 @@ func (rc *Receiver) decideMention(rec *audit.Record, p *payload, changes, approv
 		return
 	}
 
-	if started, why := rc.wakeTargets(rec, targets, p.Sender.Login); !started {
+	if started, why := rc.wakeTargets(rec, pullRequestKey(rec.Repository, rec.Number), targets, p.Sender.Login); !started {
 		rec.Decision = audit.Ignored
 		rec.Why = why
 	}
@@ -391,7 +507,7 @@ func (rc *Receiver) wakeAll(rec *audit.Record, logins []string, actor, reason st
 	for i, login := range logins {
 		targets[i] = target{login: login, reason: reason}
 	}
-	started, _ := rc.wakeTargets(rec, targets, actor)
+	started, _ := rc.wakeTargets(rec, pullRequestKey(rec.Repository, rec.Number), targets, actor)
 	return started
 }
 
@@ -403,12 +519,16 @@ type target struct {
 
 // wakeTargets starts one run per target, once each and skipping the actor, and
 // records the started profiles on the delivery's line with the first started
-// target's reason. It reports whether any run was started, and when none was,
-// why the first target was refused.
-func (rc *Receiver) wakeTargets(rec *audit.Record, targets []target, actor string) (bool, string) {
+// target's reason. A target whose key already has a run in flight is held
+// instead of started, and the line records `held` with the key when none of the
+// delivery's targets started. It reports whether any run was started or
+// anything was held, and when neither was, why the first target was refused.
+func (rc *Receiver) wakeTargets(rec *audit.Record, object string, targets []target, actor string) (bool, string) {
 	seen := make(map[string]bool, len(targets))
 	profiles := make([]string, 0, len(targets))
 	reasons := make([]string, 0, len(targets))
+	var waiting []target
+	var replaced *held
 	why := ""
 	for _, t := range targets {
 		if t.login == "" {
@@ -431,18 +551,42 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, targets []target, actor strin
 			}
 			continue
 		}
+		if free, earlier := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: t.reason}); !free {
+			waiting = append(waiting, t)
+			if replaced == nil {
+				replaced = earlier
+			}
+			continue
+		}
 		profiles = append(profiles, profile)
 		reasons = append(reasons, t.reason)
 	}
-	if len(profiles) == 0 {
+	if len(profiles) == 0 && len(waiting) == 0 {
 		return false, why
+	}
+
+	if len(profiles) == 0 {
+		heldProfiles := make([]string, 0, len(waiting))
+		for _, t := range waiting {
+			heldProfiles = append(heldProfiles, rc.agents[t.login])
+		}
+		rec.Profile = strings.Join(heldProfiles, ",")
+		rec.Reason = waiting[0].reason
+		rec.Decision = audit.Held
+		rec.Why = heldWhy(object, replaced)
+		return true, ""
 	}
 
 	rec.Profile = strings.Join(profiles, ",")
 	rec.Reason = reasons[0]
 	var startErr error
 	for i, profile := range profiles {
-		if err := rc.runner.Start(profile, reasons[i], rc.exit(rec.Delivery, profile)); err != nil && startErr == nil {
+		err := rc.runner.Start(profile, reasons[i], rc.exit(object, profile, rec.Delivery))
+		if err == nil {
+			continue
+		}
+		rc.gate.drop(object, profile)
+		if startErr == nil {
 			startErr = err
 		}
 	}
@@ -452,6 +596,13 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, targets []target, actor strin
 		return true, ""
 	}
 	rec.Decision = audit.Started
+	if len(waiting) > 0 {
+		heldProfiles := make([]string, 0, len(waiting))
+		for _, t := range waiting {
+			heldProfiles = append(heldProfiles, rc.agents[t.login])
+		}
+		rec.Why = fmt.Sprintf("held for %s: %s", object, strings.Join(heldProfiles, ","))
+	}
 	return true, ""
 }
 

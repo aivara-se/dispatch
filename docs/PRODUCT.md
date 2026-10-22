@@ -2,7 +2,7 @@
 
 GitHub posts to `dispatch` when something happens in the `aivara-se` organisation. It verifies the delivery and wakes the agent the event concerns: the reviewer a pull request asks for, the author whose review requests changes or whose change is approved but not armed, the agent an assignment or a comment names, the pusher of a pull request or of the default branch whose checks failed, the author whose review was dismissed, or the reviewers of a draft that is marked ready. The operator of a small fleet — one person, a few bots — installs it, trusts it, and reads its log when a wake is missed. The service does not do the work.
 
-v1.14 carries six flows: the review and update loop on a pull request, an assignment on an issue or on a pull request, a failing check on a pull request or on the default branch, a mention in a comment, in a review's body or in a review comment, a draft that becomes ready for review, and a review that is dismissed.
+v1.15 carries six flows: the review and update loop on a pull request, an assignment on an issue or on a pull request, a failing check on a pull request or on the default branch, a mention in a comment, in a review's body or in a review comment, a draft that becomes ready for review, and a review that is dismissed. One agent runs one thing at a time on one pull request or one branch ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)).
 
 A wake is a **reason, not an instruction**: the service says *why now*, and the agent re-reads the pull request or the issue and decides what to do. A wake may therefore be early, late, duplicated or out of order and the outcome is the same.
 
@@ -60,16 +60,22 @@ When a draft pull request is marked ready for review, the service wakes every co
 
 This is the transition from probe to candidate: the reviewers were woken when the draft opened, when there was nothing to merge, and this is the wake that says the change may land. The delivery adds no round and consults neither cap.
 
+## One run at a time
+
+An agent may have several runs at once, but not two over the same object: one pull request or one branch is worked by one agent at a time ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). A delivery that lands while that agent's run on that object is live starts nothing. It is held: when the run exits, one follow-up starts carrying the reason of the most recent delivery held for it, so a burst becomes one run, and the audit pairs the held line with the follow-up's by the delivery id. A held delivery replaces an earlier held one and is traced the same way. Different pull requests do not wait on each other, and neither do two agents on one pull request.
+
+The wait buys a whole review instead of half of one. Two runs over one head published two `CHANGES_REQUESTED` reviews 40 s apart, each carrying half the findings, and neither saw the other. What it costs is a review request waiting for the review already running, and a run that never exits holding its key until the process restarts.
+
 ## What it never does
 
 - Never starts an agent the delivery and the configuration do not call for, and never the operator. No agent is woken for the event it made, with one exception: the pusher of a failing run, who is the agent the failure is news to.
 - Never writes to GitHub: no label, no comment, no merge, no push.
-- Never holds a wake back or queues one: a review request, an assignment, a failed check, a mention, a dismissal or a draft marked ready starts a run even if the agent is already running one.
+- Never drops a wake: a review request, an assignment, a failed check, a mention, a dismissal or a draft marked ready starts a run, or is held for the agent's run on the same object and starts when it exits. Nothing is queued beyond that one held delivery.
 - Never logs a payload body or a secret value.
 - Never carries text a third party wrote into a run: the reason is identifiers and the service's own words. A comment, a review body or a review comment is read only to find a configured login in it. The one branch in a reason is the red-main ref, which a number would be if the run named a pull request.
 - Never orders events, and never depends on their order.
 
-## What v1.14 does not do
+## What v1.15 does not do
 
 - Not the board. It carries no card flow: it does not read cards, move them or assign them. An issue's column, its links and whether it is a card at all are invisible to it.
 - Not a watcher. It wakes the agent an assignment names and then forgets the issue or the pull request: a reassignment away, a close or a later edit reaches nobody.
@@ -81,7 +87,7 @@ This is the transition from probe to candidate: the reviewers were woken when th
 - Not a durable cap. The counts die with the process, and a boot line marks where.
 - Not a deployment step. A merge is the repository's own pipeline's business.
 
-## Edge cases v1.14 leaves unhandled
+## Edge cases v1.15 leaves unhandled
 
 Known, and deliberately not handled in this version. Each is a wake that does not happen, or a run that happens twice.
 
@@ -104,12 +110,13 @@ Known, and deliberately not handled in this version. Each is a wake that does no
 - **A failing run on the default branch that is not a push.** A schedule, a dispatch or another workflow wakes nobody.
 - **A flaky check.** It spends the failure budget as surely as a real break; the count does not know the difference.
 - **A failing run that names several pull requests.** One run starts, carrying the first pull request's number; the others are named only when a later run fails.
-- **An agent already running.** A wake starts a second run; nothing queues and nothing waits.
+- **A run that never exits.** Its key stays held until the process restarts, so that agent's wakes for that object stop arriving.
+- **A crash between a held delivery and its follow-up.** The held line is the trace of a wake that did not happen.
 - **A restart.** A boot line marks it and every count starts over, so a redelivery inside the lost hour can wake the agent twice.
 
 ## Acceptance
 
-v1.14 is done when each of these holds, and each is checkable by the operator.
+v1.15 is done when each of these holds, and each is checkable by the operator.
 
 - An agent added as a reviewer on a pull request wakes and reviews it.
 - An agent whose review is requested again wakes and reviews it.
@@ -151,6 +158,11 @@ v1.14 is done when each of these holds, and each is checkable by the operator.
 - A redelivered delivery wakes nobody, and the audit log shows it was seen.
 - The audit log answers, for any delivery, whether an agent was started and, when not, why.
 - A pull request stops waking anyone once it has had ten reviews that request changes.
+- A delivery that lands while its agent's run on the same pull request is live starts no run, and its line says it was held and the key it waits on.
+- When that run exits, one follow-up run starts carrying the held delivery's reason, and its line carries the held delivery's id.
+- A second delivery held for the same key replaces the first, and the one follow-up carries the latest reason.
+- Two pull requests of one agent run at once, and so do two agents on one pull request.
+- A run that exits with nothing held behind it starts nothing, and the key is free for the next delivery.
 
 ## Changelog
 
@@ -169,9 +181,4 @@ v1.14 is done when each of these holds, and each is checkable by the operator.
 - **v1.12** — a dismissed review wakes the pull request's author, because the approval the change was waiting on is gone ([`017`](adrs/017-a-dismissed-review-wakes-the-author.md)).
 - **v1.13** — the service's own boot reaches the audit, so a restart is visible and the moment a count was lost is marked ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
 - **v1.14** — every wake's session is tagged `dispatch`, so the service's own runs are one filter in the session list ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).
-
-## Roadmap
-
-Not built. Each line is decided and unbuilt; the present tense of this document still describes v1.14.
-
-- **v1.15** — one run at a time per pull request and agent. A review request, a mention or a failed check that lands while that agent is already running on the same pull request is held, and one follow-up run starts when the run in flight exits, so two partial reviews of one head cannot be published ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)).
+- **v1.15** — one run at a time per pull request or branch and agent: a delivery that lands on a key whose run is live is held, and its exit starts one follow-up, so two partial reviews of one head cannot be published ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)).

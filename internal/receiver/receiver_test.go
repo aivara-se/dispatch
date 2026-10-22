@@ -59,6 +59,41 @@ func (s *stubRunner) Start(profile, reason string, onExit func(exit int)) error 
 	return nil
 }
 
+// liveRunner starts runs that stay live until the test exits them, which is what
+// a delivery held behind an in-flight run waits on.
+type liveRunner struct {
+	mu    sync.Mutex
+	calls []call
+	exits []func(exit int)
+	err   error
+}
+
+func (l *liveRunner) Start(profile, reason string, onExit func(exit int)) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.err != nil {
+		return l.err
+	}
+	l.calls = append(l.calls, call{profile: profile, reason: reason})
+	l.exits = append(l.exits, onExit)
+	return nil
+}
+
+// exit ends the nth run started, in start order.
+func (l *liveRunner) exit(n, code int) {
+	l.mu.Lock()
+	onExit := l.exits[n]
+	l.mu.Unlock()
+	onExit(code)
+}
+
+// started returns the runs started so far.
+func (l *liveRunner) started() []call {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]call(nil), l.calls...)
+}
+
 type memAudit struct {
 	mu      sync.Mutex
 	records []audit.Record
@@ -428,9 +463,12 @@ func TestIssueAssignmentDedup(t *testing.T) {
 	}
 }
 
-func TestSecondRequestStartsSecondRun(t *testing.T) {
-	runner := &stubRunner{}
-	rc, _ := newReceiver(runner)
+// TestSecondRequestIsHeldWhileTheFirstRuns pins `021`: a delivery that lands on
+// a key whose run is live starts nothing, and the exit starts one follow-up
+// carrying the held delivery's reason.
+func TestSecondRequestIsHeldWhileTheFirstRuns(t *testing.T) {
+	runner := &liveRunner{}
+	rc, recorder := newReceiver(runner)
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
 	for _, delivery := range []string{"d1", "d2"} {
@@ -439,11 +477,141 @@ func TestSecondRequestStartsSecondRun(t *testing.T) {
 		}
 	}
 
-	if len(runner.calls) != 2 {
-		t.Fatalf("runs started = %d, want 2", len(runner.calls))
+	if got := runner.started(); len(got) != 1 {
+		t.Fatalf("runs started = %d, want the first alone", len(got))
 	}
-	if runner.calls[0] != runner.calls[1] {
-		t.Fatalf("calls differ: %+v", runner.calls)
+	held := recorder.records[1]
+	if held.Decision != audit.Held {
+		t.Fatalf("second decision = %q, want held", held.Decision)
+	}
+	if held.Delivery != "d2" || held.Profile != "meme" {
+		t.Fatalf("held record = %+v, want d2 and meme", held)
+	}
+	if held.Why != "held for aivara-se/dispatch#105" {
+		t.Fatalf("held why = %q, want the key it waits on", held.Why)
+	}
+
+	runner.exit(0, 0)
+
+	calls := runner.started()
+	if len(calls) != 2 {
+		t.Fatalf("runs started = %d, want the follow-up too", len(calls))
+	}
+	if calls[1] != calls[0] {
+		t.Fatalf("follow-up call = %+v, want the held delivery's %+v", calls[1], calls[0])
+	}
+	last := recorder.records[len(recorder.records)-1]
+	if last.Delivery != "d2" || last.Profile != "meme" || last.Decision != audit.Started {
+		t.Fatalf("follow-up line = %+v, want d2 started", last)
+	}
+	if last.Reason != held.Reason {
+		t.Fatalf("follow-up reason = %q, want the held line's %q", last.Reason, held.Reason)
+	}
+}
+
+// TestALaterHeldDeliveryReplacesTheEarlierOne pins that a burst becomes one
+// follow-up carrying the last reason, and that a non-zero exit releases the key
+// as surely as a clean one.
+func TestALaterHeldDeliveryReplacesTheEarlierOne(t *testing.T) {
+	runner := &liveRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
+
+	for _, delivery := range []string{"d1", "d2", "d3"} {
+		if w := post(rc, "pull_request", delivery, body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", w.Code)
+		}
+	}
+	if got := runner.started(); len(got) != 1 {
+		t.Fatalf("runs started = %d, want the first alone", len(got))
+	}
+	if got := recorder.records[2].Why; got != "held for aivara-se/dispatch#105, replacing delivery d2" {
+		t.Fatalf("third why = %q, want it to name the delivery it replaced", got)
+	}
+
+	runner.exit(0, 1)
+
+	if got := runner.started(); len(got) != 2 {
+		t.Fatalf("runs started = %d, want the follow-up too", len(got))
+	}
+	var exits, followUps int
+	for _, r := range recorder.records {
+		switch {
+		case r.Exit != 0:
+			exits++
+		case r.Delivery == "d3" && r.Decision == audit.Started:
+			followUps++
+		}
+	}
+	if exits != 1 || followUps != 1 {
+		t.Fatalf("records = %+v, want d1's exit line and d3's follow-up", recorder.records)
+	}
+	if got := recorder.records[len(recorder.records)-1]; got.Delivery != "d3" {
+		t.Fatalf("follow-up line = %+v, want d3 rather than the replaced d2", got)
+	}
+}
+
+// TestExitWithNothingHeldFreesTheKey pins the clean-exit case: an exit starts no
+// run of its own, and the next delivery takes the key and starts normally.
+func TestExitWithNothingHeldFreesTheKey(t *testing.T) {
+	runner := &liveRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
+
+	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	runner.exit(0, 0)
+
+	if got := runner.started(); len(got) != 1 {
+		t.Fatalf("runs started = %d, want the first alone", len(got))
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("audit records = %+v, want the delivery's line alone", recorder.records)
+	}
+
+	if w := post(rc, "pull_request", "d2", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	if got := runner.started(); len(got) != 2 {
+		t.Fatalf("runs started = %d, want the key to be free again", len(got))
+	}
+	if got := recorder.records[1].Decision; got != audit.Started {
+		t.Fatalf("second decision = %q, want started", got)
+	}
+}
+
+// TestTheGateIsPerObject pins that two pull requests of one agent do not wait on
+// each other.
+func TestTheGateIsPerObject(t *testing.T) {
+	runner := &liveRunner{}
+	rc, _ := newReceiver(runner)
+
+	for _, number := range []int{105, 106} {
+		body := reviewBodyOn(number, "review_requested", "thani-sh", "thani-sh-meme")
+		if w := post(rc, "pull_request", fmt.Sprintf("d%d", number), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", w.Code)
+		}
+	}
+
+	if got := runner.started(); len(got) != 2 {
+		t.Fatalf("runs started = %d, want one per pull request", len(got))
+	}
+}
+
+// TestTheGateIsPerAgent pins that two agents on one pull request do not wait on
+// each other.
+func TestTheGateIsPerAgent(t *testing.T) {
+	runner := &liveRunner{}
+	rc, _ := newReceiver(runner)
+	body := commentBody(105, "created", "MEMBER", "thani-sh", "@thani-sh-meme and @thani-sh-mama")
+
+	if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+
+	if got := runner.started(); len(got) != 2 {
+		t.Fatalf("runs started = %d, want one per agent", len(got))
 	}
 }
 

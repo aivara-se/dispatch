@@ -2515,7 +2515,7 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 
-			want := []string{"--profile", tc.profile, "chat", "-q", tc.reason, "--source", "dispatch"}
+			want := []string{"--profile", tc.profile, "chat", "-q", tc.reason, "--source", "tool"}
 			if len(args) != len(want) {
 				t.Fatalf("argv = %q, want %q", args, want)
 			}

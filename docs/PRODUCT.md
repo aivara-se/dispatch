@@ -72,7 +72,7 @@ The wait buys a whole review instead of half of one. Two runs over one head publ
 - Never writes to GitHub: no label, no comment, no merge, no push.
 - Never drops a wake: a review request, an assignment, a failed check, a mention, a dismissal or a draft marked ready starts a run, or is held for the agent's run on the same object and starts when it exits. Nothing is queued beyond that one held delivery.
 - Never logs a payload body or a secret value.
-- Never carries text a third party wrote into a run: the reason is identifiers and the service's own words. A comment, a review body or a review comment is read only to find a configured login in it. The one branch in a reason is the red-main ref, which a number would be if the run named a pull request.
+- Never carries text a third party wrote into a run's reason: the reason is identifiers and the service's own words. A comment, a review body or a review comment is read only to find a configured login in it. The one branch in a reason is the red-main ref, which a number would be if the run named a pull request. What a run does carry beyond its reason is the session for its object, the agent's own record of the rounds before, so text it read then is replayed to it now ([`022`](adrs/022-a-wake-resumes-its-objects-session.md)).
 - Never orders events, and never depends on their order.
 
 ## What v1.16 does not do

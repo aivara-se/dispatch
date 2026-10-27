@@ -319,12 +319,13 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 			rc.pushRuns.add(branchKey(rec.Repository, p.WorkflowRun.HeadBranch))
 		}
 	}
-	if free, replaced := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: reason, spend: spend}); !free {
+	free, replaced, claim := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: reason, spend: spend})
+	if !free {
 		rec.Decision = audit.Held
 		rec.Why = heldWhy(object, replaced)
 		return
 	}
-	if err := rc.runner.Start(profile, reason, object, rc.exit(object, profile, rec.Delivery)); err != nil {
+	if err := rc.runner.Start(profile, reason, object, rc.exit(object, profile, rec.Delivery, claim)); err != nil {
 		rc.gate.drop(object, profile)
 		rec.Decision = audit.StartFailed
 		rec.Why = err.Error()
@@ -335,17 +336,18 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 }
 
 // exit returns the callback a started run reports its exit through: a non-zero
-// status appends the run's own line, and the key the run held is released,
-// starting the one delivery that was held for it.
-func (rc *Receiver) exit(object, profile, delivery string) func(int) {
+// status appends the run's own line, and the claim the run held is released,
+// starting the one delivery that was held for it. A run whose key moved on
+// while it ran releases nothing.
+func (rc *Receiver) exit(object, profile, delivery string, claim *slot) func(int) {
 	return func(code int) {
 		if code != 0 {
 			if err := rc.audit.Append(audit.Record{Delivery: delivery, Profile: profile, Exit: code}); err != nil {
 				log.Printf("dispatch: audit: %v", err)
 			}
 		}
-		if next := rc.gate.release(object, profile); next != nil {
-			rc.followUp(object, profile, *next)
+		if next := rc.gate.release(object, profile, claim); next != nil {
+			rc.followUp(object, profile, claim, *next)
 		}
 	}
 }
@@ -354,10 +356,11 @@ func (rc *Receiver) exit(object, profile, delivery string) func(int) {
 // delivery was held under — a run is a wake whether or not its delivery started
 // it. Its line carries the held delivery's id, profile and reason, so a reader
 // pairs it with the held line; a follow-up that cannot start leaves the key free
-// rather than held.
-func (rc *Receiver) followUp(object, profile string, d held) {
+// rather than held. It inherits the claim the earlier run held, so its own exit
+// releases the key it took over.
+func (rc *Receiver) followUp(object, profile string, claim *slot, d held) {
 	rec := audit.Record{Delivery: d.delivery, Profile: profile, Reason: d.reason, Decision: audit.Started}
-	if err := rc.runner.Start(profile, d.reason, object, rc.exit(object, profile, d.delivery)); err != nil {
+	if err := rc.runner.Start(profile, d.reason, object, rc.exit(object, profile, d.delivery, claim)); err != nil {
 		rc.gate.drop(object, profile)
 		rec.Decision = audit.StartFailed
 		rec.Why = err.Error()
@@ -381,10 +384,10 @@ func heldWhy(object string, replaced *held) string {
 // gate holds at most one delivery per object and profile, for as long as that
 // key's run is live ([`021`](docs/adrs/021-one-run-per-pull-request-per-agent.md)).
 // A key's presence means a run is going; a delivery under it is the one waiting
-// for that run's exit. Nothing here describes the run itself. A key no delivery
-// has reached for the TTL is freed, so a run that never exits does not pin its
-// object for the life of the process
-// ([`024`](docs/adrs/024-a-key-is-forgotten-after-an-hour-of-silence.md)).
+// for that run's exit, and only the run that claimed a key frees it. Nothing
+// here describes the run itself. A key no delivery has reached for the TTL is
+// freed, so a run that never exits does not pin its object for the life of the
+// process ([`024`](docs/adrs/024-a-key-is-forgotten-after-an-hour-of-silence.md)).
 type gate struct {
 	mu    sync.Mutex
 	ttl   time.Duration
@@ -398,7 +401,9 @@ func newGate(ttl time.Duration, now func() time.Time) *gate {
 }
 
 // slot is one key's run: when a delivery last reached the key, and the delivery
-// held for it while it runs.
+// held for it while it runs. The slot is also the claim: a run's exit releases
+// only the slot still stored under its key, so a run that exits after its key
+// was swept or handed to a successor frees nothing.
 type slot struct {
 	at   time.Time
 	held *held
@@ -413,12 +418,12 @@ type held struct {
 	spend func()
 }
 
-// hold claims the key for a run and reports whether it was free. When it was
-// not, d replaces whatever was held there and the replaced delivery is
-// returned, nil when the earlier one was only running. A key no delivery has
-// reached for the TTL is free, because its run is not coming back to release
-// it.
-func (g *gate) hold(object, profile string, d held) (free bool, replaced *held) {
+// hold claims the key for a run and reports whether it was free, handing back
+// the slot that run must release by. When it was not free, d replaces whatever
+// was held there and the replaced delivery is returned, nil when the earlier one
+// was only running. A key no delivery has reached for the TTL is free, because
+// its run is not coming back to release it.
+func (g *gate) hold(object, profile string, d held) (free bool, replaced *held, claim *slot) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.sweep()
@@ -432,16 +437,19 @@ func (g *gate) hold(object, profile string, d held) (free bool, replaced *held) 
 		replaced := running.held
 		running.held = &d
 		running.at = now
-		return false, replaced
+		return false, replaced, nil
 	}
-	profiles[profile] = &slot{at: now}
-	return true, nil
+	s := &slot{at: now}
+	profiles[profile] = s
+	return true, nil, s
 }
 
-// release clears the key and returns the delivery held for it, if any. A key
-// with a held delivery stays claimed, because that delivery's follow-up run now
-// owns it.
-func (g *gate) release(object, profile string) *held {
+// release frees the key and returns the delivery held for it, if any, but only
+// while claim is still the slot stored under it: a run that exits after its key
+// was swept, or after a successor claimed it, frees nothing and returns nil. A
+// key with a held delivery stays claimed, because that delivery's follow-up run
+// now owns it, and claim stays its token.
+func (g *gate) release(object, profile string, claim *slot) *held {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	profiles, ok := g.live[object]
@@ -449,7 +457,7 @@ func (g *gate) release(object, profile string) *held {
 		return nil
 	}
 	s, ok := profiles[profile]
-	if !ok {
+	if !ok || s != claim {
 		return nil
 	}
 	next := s.held
@@ -592,6 +600,7 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, object string, targets []targ
 	seen := make(map[string]bool, len(targets))
 	profiles := make([]string, 0, len(targets))
 	reasons := make([]string, 0, len(targets))
+	claims := make([]*slot, 0, len(targets))
 	var waiting []target
 	var replaced *held
 	why := ""
@@ -616,7 +625,8 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, object string, targets []targ
 			}
 			continue
 		}
-		if free, earlier := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: t.reason}); !free {
+		free, earlier, claim := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: t.reason})
+		if !free {
 			waiting = append(waiting, t)
 			if replaced == nil {
 				replaced = earlier
@@ -625,6 +635,7 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, object string, targets []targ
 		}
 		profiles = append(profiles, profile)
 		reasons = append(reasons, t.reason)
+		claims = append(claims, claim)
 	}
 	if len(profiles) == 0 && len(waiting) == 0 {
 		return false, why
@@ -646,7 +657,7 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, object string, targets []targ
 	rec.Reason = reasons[0]
 	var startErr error
 	for i, profile := range profiles {
-		err := rc.runner.Start(profile, reasons[i], object, rc.exit(object, profile, rec.Delivery))
+		err := rc.runner.Start(profile, reasons[i], object, rc.exit(object, profile, rec.Delivery, claims[i]))
 		if err == nil {
 			continue
 		}

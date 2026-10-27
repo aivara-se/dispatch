@@ -2694,7 +2694,7 @@ func TestGateFreesAKeyItsRunNeverReleased(t *testing.T) {
 	g := newGate(time.Hour, func() time.Time { return now })
 
 	const object = "aivara-se/dispatch#105"
-	if free, _ := g.hold(object, "meme", held{delivery: "d1", reason: "first"}); !free {
+	if free, _, _ := g.hold(object, "meme", held{delivery: "d1", reason: "first"}); !free {
 		t.Fatal("a free key was not claimed")
 	}
 
@@ -2702,8 +2702,30 @@ func TestGateFreesAKeyItsRunNeverReleased(t *testing.T) {
 	for i := 0; i < sweepEvery; i++ {
 		g.hold(fmt.Sprintf("aivara-se/dispatch#%d", 1000+i), "meme", held{delivery: "d", reason: "other"})
 	}
-	if free, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); !free {
+	if free, _, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); !free {
 		t.Fatal("an abandoned key was not freed")
+	}
+}
+
+// TestGateReleasesOnlyItsOwnClaim pins the claim a hold hands back: an abandoned
+// run's exit arrives after a successor took the key, frees nothing, and leaves
+// the successor's key holding the next delivery.
+func TestGateReleasesOnlyItsOwnClaim(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	g := newGate(time.Hour, func() time.Time { return now })
+
+	const object = "aivara-se/dispatch#105"
+	_, _, abandoned := g.hold(object, "meme", held{delivery: "d1", reason: "first"})
+
+	now = now.Add(2 * time.Hour)
+	if free, _, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); !free {
+		t.Fatal("an abandoned key was not freed")
+	}
+	if next := g.release(object, "meme", abandoned); next != nil {
+		t.Fatalf("the abandoned run's exit released %+v, want nothing", next)
+	}
+	if free, _, _ := g.hold(object, "meme", held{delivery: "d3", reason: "third"}); free {
+		t.Fatal("a third run started beside the second")
 	}
 }
 
@@ -2715,8 +2737,8 @@ func TestGateKeepsADeliveryHeldPastTheTTL(t *testing.T) {
 	g := newGate(time.Hour, func() time.Time { return now })
 
 	const object = "aivara-se/dispatch#105"
-	g.hold(object, "meme", held{delivery: "d1", reason: "first"})
-	if free, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); free {
+	_, _, claim := g.hold(object, "meme", held{delivery: "d1", reason: "first"})
+	if free, _, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); free {
 		t.Fatal("a busy key was claimed twice")
 	}
 
@@ -2724,7 +2746,7 @@ func TestGateKeepsADeliveryHeldPastTheTTL(t *testing.T) {
 	for i := 0; i < sweepEvery; i++ {
 		g.hold(fmt.Sprintf("aivara-se/dispatch#%d", 1000+i), "meme", held{delivery: "d", reason: "other"})
 	}
-	next := g.release(object, "meme")
+	next := g.release(object, "meme", claim)
 	if next == nil || next.delivery != "d2" {
 		t.Fatalf("release returned %+v, want the held delivery d2", next)
 	}
@@ -2780,11 +2802,11 @@ func TestGateFreesAKeyOnItsNextHold(t *testing.T) {
 	g := newGate(time.Hour, func() time.Time { return now })
 
 	const object = "aivara-se/dispatch#105"
-	if free, _ := g.hold(object, "meme", held{delivery: "d1", reason: "first"}); !free {
+	if free, _, _ := g.hold(object, "meme", held{delivery: "d1", reason: "first"}); !free {
 		t.Fatal("a free key was not claimed")
 	}
 	now = now.Add(5 * time.Hour)
-	if free, replaced := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); !free {
+	if free, replaced, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); !free {
 		t.Fatalf("a key five hours silent was still held, replacing %+v", replaced)
 	}
 }

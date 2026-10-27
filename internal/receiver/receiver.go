@@ -31,9 +31,10 @@ const MaxRounds = 10
 // MaxFailures is the number of failed-check wakes a pull request gets.
 const MaxFailures = 5
 
-// Runner starts a profile's run and reports the child's exit status once.
+// Runner starts a profile's run and reports the child's exit status once. The
+// title is the session the run resumes, and names the object it works.
 type Runner interface {
-	Start(profile, reason string, onExit func(exit int)) error
+	Start(profile, reason, title string, onExit func(exit int)) error
 }
 
 // Recorder appends a delivery's audit line.
@@ -311,7 +312,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		rec.Why = heldWhy(object, replaced)
 		return
 	}
-	if err := rc.runner.Start(profile, reason, rc.exit(object, profile, rec.Delivery)); err != nil {
+	if err := rc.runner.Start(profile, reason, object, rc.exit(object, profile, rec.Delivery)); err != nil {
 		rc.gate.drop(object, profile)
 		rec.Decision = audit.StartFailed
 		rec.Why = err.Error()
@@ -344,7 +345,7 @@ func (rc *Receiver) exit(object, profile, delivery string) func(int) {
 // rather than held.
 func (rc *Receiver) followUp(object, profile string, d held) {
 	rec := audit.Record{Delivery: d.delivery, Profile: profile, Reason: d.reason, Decision: audit.Started}
-	if err := rc.runner.Start(profile, d.reason, rc.exit(object, profile, d.delivery)); err != nil {
+	if err := rc.runner.Start(profile, d.reason, object, rc.exit(object, profile, d.delivery)); err != nil {
 		rc.gate.drop(object, profile)
 		rec.Decision = audit.StartFailed
 		rec.Why = err.Error()
@@ -591,7 +592,7 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, object string, targets []targ
 	rec.Reason = reasons[0]
 	var startErr error
 	for i, profile := range profiles {
-		err := rc.runner.Start(profile, reasons[i], rc.exit(object, profile, rec.Delivery))
+		err := rc.runner.Start(profile, reasons[i], object, rc.exit(object, profile, rec.Delivery))
 		if err == nil {
 			continue
 		}

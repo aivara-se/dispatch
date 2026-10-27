@@ -20,7 +20,7 @@ func TestStartReportsTheExitStatus(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			exits := make(chan int, 1)
-			err := New(tc.path).Start("meme", "Dispatch: a reason", func(exit int) { exits <- exit })
+			err := New(tc.path).Start("meme", "Dispatch: a reason", "aivara-se/dispatch#1", func(exit int) { exits <- exit })
 			if err != nil {
 				t.Fatalf("Start: %v", err)
 			}
@@ -37,7 +37,7 @@ func TestStartReportsTheExitStatus(t *testing.T) {
 }
 
 func TestStartThatCannotStart(t *testing.T) {
-	err := New("/nonexistent/hermes").Start("meme", "Dispatch: a reason", func(int) {})
+	err := New("/nonexistent/hermes").Start("meme", "Dispatch: a reason", "aivara-se/dispatch#1", func(int) {})
 	if err == nil {
 		t.Fatal("Start of a missing binary returned no error")
 	}

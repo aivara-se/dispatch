@@ -38,6 +38,7 @@ func TestMain(m *testing.M) {
 type call struct {
 	profile string
 	reason  string
+	title   string
 }
 
 type stubRunner struct {
@@ -47,9 +48,9 @@ type stubRunner struct {
 	exit  int
 }
 
-func (s *stubRunner) Start(profile, reason string, onExit func(exit int)) error {
+func (s *stubRunner) Start(profile, reason, title string, onExit func(exit int)) error {
 	s.mu.Lock()
-	s.calls = append(s.calls, call{profile: profile, reason: reason})
+	s.calls = append(s.calls, call{profile: profile, reason: reason, title: title})
 	err := s.err
 	s.mu.Unlock()
 	if err != nil {
@@ -68,13 +69,13 @@ type liveRunner struct {
 	err   error
 }
 
-func (l *liveRunner) Start(profile, reason string, onExit func(exit int)) error {
+func (l *liveRunner) Start(profile, reason, title string, onExit func(exit int)) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.err != nil {
 		return l.err
 	}
-	l.calls = append(l.calls, call{profile: profile, reason: reason})
+	l.calls = append(l.calls, call{profile: profile, reason: reason, title: title})
 	l.exits = append(l.exits, onExit)
 	return nil
 }
@@ -682,7 +683,7 @@ func TestChangesRequestedWakesAuthor(t *testing.T) {
 	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105"}
+	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -708,7 +709,7 @@ func TestIssueAssignmentWakesAssignee(t *testing.T) {
 	if w := post(rc, "issues", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "meme", reason: "Dispatch: issue assigned on aivara-se/dispatch#124"}
+	want := call{profile: "meme", reason: "Dispatch: issue assigned on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -735,7 +736,7 @@ func TestPullRequestAssignmentWakesAssignee(t *testing.T) {
 	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "meme", reason: "Dispatch: pull request assigned on aivara-se/dispatch#105"}
+	want := call{profile: "meme", reason: "Dispatch: pull request assigned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -786,7 +787,7 @@ func TestFailedCheckWakesPusher(t *testing.T) {
 	if w := post(rc, "workflow_run", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch#105"}
+	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -918,7 +919,7 @@ func TestRedMainWakesItsPusher(t *testing.T) {
 	if w := post(rc, "workflow_run", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch@main"}
+	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch@main", title: "aivara-se/dispatch@main"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -1051,7 +1052,7 @@ func TestRedMainCountsOnlyRunsThatNameNoPullRequest(t *testing.T) {
 	if len(runner.calls) != MaxFailures+1 {
 		t.Fatalf("runs started = %d, want %d: the branch's budget was spent by runs that name a pull request", len(runner.calls), MaxFailures+1)
 	}
-	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch@main"}
+	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch@main", title: "aivara-se/dispatch@main"}
 	if got := runner.calls[len(runner.calls)-1]; got != want {
 		t.Fatalf("red main call = %+v, want %+v", got, want)
 	}
@@ -1110,7 +1111,7 @@ func TestReviewBodyMentionWakesAgent(t *testing.T) {
 	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := []call{{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}}
+	want := []call{{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}}
 	if len(runner.calls) != len(want) || runner.calls[0] != want[0] {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -1130,7 +1131,7 @@ func TestReviewCommentMentionWakesAgent(t *testing.T) {
 	if w := post(rc, "pull_request_review_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}
+	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -1152,8 +1153,8 @@ func TestChangesRequestedAndMentionAreOneLine(t *testing.T) {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
-		{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105"},
-		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"},
+		{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"},
+		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"},
 	}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
@@ -1187,7 +1188,7 @@ func TestAuthorMentionedInTheirOwnReviewWakesOnce(t *testing.T) {
 	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105"}
+	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -1209,8 +1210,8 @@ func TestUnarmedApprovalAndMentionAreOneLine(t *testing.T) {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
-		{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105"},
-		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"},
+		{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"},
+		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"},
 	}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
@@ -1312,8 +1313,8 @@ func TestMentionWakesEachAgentOnce(t *testing.T) {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
-		{profile: "mama", reason: "Dispatch: mentioned on aivara-se/dispatch#124"},
-		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#124"},
+		{profile: "mama", reason: "Dispatch: mentioned on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"},
+		{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"},
 	}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
@@ -1505,7 +1506,7 @@ func TestChangesReviewMentionIgnoresTheReviewCap(t *testing.T) {
 	if len(runner.calls) != MaxRounds+1 {
 		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
 	}
-	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105"}
+	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if got := runner.calls[len(runner.calls)-1]; got != want {
 		t.Fatalf("mention call = %+v, want %+v", got, want)
 	}
@@ -1548,7 +1549,7 @@ func TestUnarmedApprovalWakesAuthor(t *testing.T) {
 	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105"}
+	want := call{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -1585,7 +1586,7 @@ func TestUnarmedApprovalIgnoresTheReviewCap(t *testing.T) {
 	if len(runner.calls) != MaxRounds+1 {
 		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
 	}
-	want := call{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105"}
+	want := call{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if got := runner.calls[len(runner.calls)-1]; got != want {
 		t.Fatalf("approval call = %+v, want %+v", got, want)
 	}
@@ -1673,7 +1674,7 @@ func TestDismissedReviewWakesAuthor(t *testing.T) {
 	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
-	want := call{profile: "mama", reason: "Dispatch: approval dismissed on aivara-se/dispatch#105"}
+	want := call{profile: "mama", reason: "Dispatch: approval dismissed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
 	}
@@ -1745,7 +1746,7 @@ func TestDismissalConsultsNeitherCap(t *testing.T) {
 	if len(runner.calls) != MaxRounds+MaxFailures+1 {
 		t.Fatalf("runs started = %d, want %d: the dismissal was refused", len(runner.calls), MaxRounds+MaxFailures+1)
 	}
-	want := call{profile: "mama", reason: "Dispatch: approval dismissed on aivara-se/dispatch#105"}
+	want := call{profile: "mama", reason: "Dispatch: approval dismissed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
 	if got := runner.calls[len(runner.calls)-1]; got != want {
 		t.Fatalf("dismissal call = %+v, want %+v", got, want)
 	}
@@ -1772,8 +1773,8 @@ func TestReadyForReviewWakesReviewers(t *testing.T) {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
-		{profile: "mama", reason: "Dispatch: ready for review on aivara-se/dispatch#105"},
-		{profile: "meme", reason: "Dispatch: ready for review on aivara-se/dispatch#105"},
+		{profile: "mama", reason: "Dispatch: ready for review on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"},
+		{profile: "meme", reason: "Dispatch: ready for review on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"},
 	}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
@@ -1948,7 +1949,7 @@ func TestIssueAssignmentAddsNoRound(t *testing.T) {
 	if len(runner.calls) != MaxRounds+1 {
 		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxRounds+1)
 	}
-	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#124"}
+	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"}
 	if got := runner.calls[len(runner.calls)-1]; got != want {
 		t.Fatalf("review after the assignments = %+v, want %+v", got, want)
 	}
@@ -2441,50 +2442,62 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		body    string
 		profile string
 		reason  string
+		title   string
 	}{
 		{
 			"review requested", "pull_request", reviewRequested, "meme",
 			"Dispatch: review requested on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 		{
 			"changes requested", "pull_request_review", changesRequested, "mama",
 			"Dispatch: changes requested on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 		{
 			"issue assigned", "issues", issueAssigned, "meme",
 			"Dispatch: issue assigned on aivara-se/dispatch#124",
+			"aivara-se/dispatch#124",
 		},
 		{
 			"pull request assigned", "pull_request", prAssigned, "meme",
 			"Dispatch: pull request assigned on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 		{
 			"checks failed", "workflow_run", failedRun, "meme",
 			"Dispatch: checks failed on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 		{
 			"red main", "workflow_run", redMain, "meme",
 			"Dispatch: checks failed on aivara-se/dispatch@main",
+			"aivara-se/dispatch@main",
 		},
 		{
 			"mentioned", "issue_comment", mentioned, "meme",
 			"Dispatch: mentioned on aivara-se/dispatch#124",
+			"aivara-se/dispatch#124",
 		},
 		{
 			"mentioned in a review", "pull_request_review", reviewMention, "meme",
 			"Dispatch: mentioned on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 		{
 			"approved but not armed", "pull_request_review", unarmedApproval, "mama",
 			"Dispatch: approved but not armed on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 		{
 			"review dismissed", "pull_request_review", dismissedReview, "mama",
 			"Dispatch: approval dismissed on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 		{
 			"ready for review", "pull_request", readyForReview, "meme",
 			"Dispatch: ready for review on aivara-se/dispatch#105",
+			"aivara-se/dispatch#105",
 		},
 	}
 
@@ -2515,7 +2528,7 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 
-			want := []string{"--profile", tc.profile, "chat", "-q", tc.reason, "--source", "tool"}
+			want := []string{"--profile", tc.profile, "chat", "-q", tc.reason, "--source", "tool", "-c", tc.title, "--create-if-missing"}
 			if len(args) != len(want) {
 				t.Fatalf("argv = %q, want %q", args, want)
 			}

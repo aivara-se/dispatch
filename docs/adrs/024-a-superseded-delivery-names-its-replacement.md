@@ -20,7 +20,7 @@ line delivery=d-replaces decision=started why=""
 - **The held line is appended when the delivery is held, unchanged.** It records `held` and the key it waits on, and it is the trace a crash leaves.
 - **A superseded delivery appends one more line at the moment a later delivery for the same key replaces it**: decision `superseded`, its own delivery id and profile, and a `why` naming the key and the delivery that replaced it. This is where `021`'s "appends nothing further" stops; everything else in `021` stands.
 - **The naming stays on the replacing delivery's line too**, which reads `replacing delivery <id>`: the two lines name each other, and each one explains its own arrival.
-- **A superseded delivery starts nothing, spends no cap and is never retried.** It carries no `started` line, so `021`'s pairing — a held line paired with its follow-up's line by delivery id — is unchanged.
+- **A superseded delivery starts nothing for that key and profile, spends no cap and is never retried.** It carries no `started` line for that key and profile; a delivery that also started a run for another profile keeps that line, and only the profile tells the two apart. `021`'s pairing — a held line paired with its follow-up's line by the delivery id and the profile — is unchanged.
 - **The outcome is a value in the `decision` field**, beside `started`, `held`, `ignored`, `duplicate` and `start_failed`, because the shape `005` fixes is one line per decision and not one per delivery.
 
 ## Consequences

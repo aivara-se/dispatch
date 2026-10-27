@@ -605,6 +605,52 @@ func TestAReplacementNamesItselfOnEveryHeldDelivery(t *testing.T) {
 	}
 }
 
+// TestASupersededProfileLeavesTheStartedOne pins the delivery that starts a run
+// for one profile and is held for another: the replacement supersedes the held
+// key alone, and the run the same delivery started is untouched
+// ([`024`](docs/adrs/024-a-superseded-delivery-names-its-replacement.md)).
+func TestASupersededProfileLeavesTheStartedOne(t *testing.T) {
+	runner := &liveRunner{}
+	rc, recorder := newReceiver(runner)
+
+	hold := reviewBody("review_requested", "thani-sh", "thani-sh-mama")
+	both := readyBody("thani-sh", "thani-sh-meme", "thani-sh-mama")
+	for _, d := range []struct{ id, event, body string }{
+		{"d1", "pull_request", hold},
+		{"d2", "pull_request", both},
+		{"d3", "pull_request", hold},
+	} {
+		if w := post(rc, d.event, d.id, d.body, sign(d.body)); w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", w.Code)
+		}
+	}
+	if got := runner.started(); len(got) != 2 || got[1].profile != "meme" {
+		t.Fatalf("runs started = %+v, want mama's then meme's", got)
+	}
+
+	var superseded, startedForHeld int
+	for _, r := range recorder.records {
+		if r.Delivery != "d2" {
+			continue
+		}
+		switch {
+		case r.Decision == audit.Superseded && r.Profile == "mama":
+			superseded++
+		case r.Decision == audit.Started && r.Profile == "mama":
+			startedForHeld++
+		}
+	}
+	if superseded != 1 || startedForHeld != 0 {
+		t.Fatalf("records = %+v, want d2 superseded for mama and never started for it", recorder.records)
+	}
+	for _, r := range recorder.records {
+		if r.Delivery == "d2" && r.Profile == "meme" && r.Decision == audit.Started {
+			return
+		}
+	}
+	t.Fatalf("records = %+v, want d2's run for meme still standing", recorder.records)
+}
+
 // TestExitWithNothingHeldFreesTheKey pins the clean-exit case: an exit starts no
 // run of its own, and the next delivery takes the key and starts normally.
 func TestExitWithNothingHeldFreesTheKey(t *testing.T) {

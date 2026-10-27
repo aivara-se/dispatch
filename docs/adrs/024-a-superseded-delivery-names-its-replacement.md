@@ -21,7 +21,7 @@ line delivery=d-replaces decision=started why=""
 - **A superseded delivery appends one more line at the moment a later delivery for the same key replaces it**: decision `superseded`, its own delivery id and profile, and a `why` naming the key and the delivery that replaced it. This is where `021`'s "appends nothing further" stops; everything else in `021` stands.
 - **The naming stays on the replacing delivery's line too**, which reads `replacing delivery <id>`: the two lines name each other, and each one explains its own arrival.
 - **A superseded delivery starts nothing for that key and profile, spends no cap and is never retried.** It carries no `started` line for that key and profile; a delivery that also started a run for another profile keeps that line, and only the profile tells the two apart. `021`'s pairing — a held line paired with its follow-up's line by the delivery id and the profile — is unchanged.
-- **The outcome is a value in the `decision` field**, beside `started`, `held`, `ignored`, `duplicate` and `start_failed`, because the shape `005` fixes is one line per decision and not one per delivery.
+- **The outcome is a value in the `decision` field**, beside `started`, `held`, `ignored`, `duplicate` and `start_failed`, so a reader selects on it as it selects on those. `005`'s "One JSON Lines line per delivery" is extended again, as `015` and `021` extended it: a superseded delivery leaves two lines for its key, and the later one is what became of it.
 
 ## Consequences
 

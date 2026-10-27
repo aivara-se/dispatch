@@ -163,6 +163,7 @@ v1.16 is done when each of these holds, and each is checkable by the operator.
 - A second delivery held for the same key replaces the first, and the one follow-up carries the latest reason.
 - Two pull requests of one agent run at once, and so do two agents on one pull request.
 - A run that exits with nothing held behind it starts nothing, and the key is free for the next delivery.
+- Two wakes on one pull request show one session under its title, `aivara-se/dispatch#<n>`, and the second appends to it instead of starting again.
 
 ## Changelog
 

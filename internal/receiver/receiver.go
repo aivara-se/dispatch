@@ -31,6 +31,11 @@ const MaxRounds = 10
 // MaxFailures is the number of failed-check wakes a pull request gets.
 const MaxFailures = 5
 
+// sweepEvery is how many additions a cache takes between the sweeps that
+// forget its expired keys, so one delivery in that many pays for a scan of the
+// whole cache rather than all of them.
+const sweepEvery = 256
+
 // Runner starts a profile's run and reports the child's exit status once. The
 // title is the session the run resumes, and names the object it works.
 type Runner interface {
@@ -58,16 +63,22 @@ type Receiver struct {
 // New returns a Receiver for the given secret and configured login-to-profile
 // map.
 func New(secret []byte, agents map[string]string, runner Runner, recorder Recorder) *Receiver {
+	return newWithClock(secret, agents, runner, recorder, time.Now)
+}
+
+// newWithClock is New with the clock its caches read, so a test can age a key
+// past the TTL it is forgotten by.
+func newWithClock(secret []byte, agents map[string]string, runner Runner, recorder Recorder, now func() time.Time) *Receiver {
 	return &Receiver{
 		secret:   secret,
 		agents:   agents,
 		runner:   runner,
 		audit:    recorder,
-		seen:     newSeen(DedupTTL, time.Now),
-		gate:     newGate(),
-		rounds:   newCounter(MaxRounds),
-		failures: newCounter(MaxFailures),
-		pushRuns: newCounter(MaxFailures),
+		seen:     newSeen(DedupTTL, now),
+		gate:     newGate(DedupTTL, now),
+		rounds:   newCounter(MaxRounds, DedupTTL, now),
+		failures: newCounter(MaxFailures, DedupTTL, now),
+		pushRuns: newCounter(MaxFailures, DedupTTL, now),
 	}
 }
 
@@ -369,15 +380,28 @@ func heldWhy(object string, replaced *held) string {
 
 // gate holds at most one delivery per object and profile, for as long as that
 // key's run is live ([`021`](docs/adrs/021-one-run-per-pull-request-per-agent.md)).
-// A key's presence means a run is going; a non-nil delivery under it is the one
-// waiting for that run's exit. Nothing here describes the run itself.
+// A key's presence means a run is going; a delivery under it is the one waiting
+// for that run's exit. Nothing here describes the run itself. A key no delivery
+// has reached for the TTL is freed, so a run that never exits does not pin its
+// object for the life of the process
+// ([`024`](docs/adrs/024-a-key-is-forgotten-after-an-hour-of-silence.md)).
 type gate struct {
-	mu   sync.Mutex
-	live map[string]map[string]*held
+	mu    sync.Mutex
+	ttl   time.Duration
+	now   func() time.Time
+	holds int
+	live  map[string]map[string]*slot
 }
 
-func newGate() *gate {
-	return &gate{live: make(map[string]map[string]*held)}
+func newGate(ttl time.Duration, now func() time.Time) *gate {
+	return &gate{ttl: ttl, now: now, live: make(map[string]map[string]*slot)}
+}
+
+// slot is one key's run: when a delivery last reached the key, and the delivery
+// held for it while it runs.
+type slot struct {
+	at   time.Time
+	held *held
 }
 
 // held is one delivery waiting for its key's run to exit.
@@ -395,16 +419,20 @@ type held struct {
 func (g *gate) hold(object, profile string, d held) (free bool, replaced *held) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.sweep()
+	now := g.now()
 	profiles, ok := g.live[object]
 	if !ok {
-		profiles = make(map[string]*held)
+		profiles = make(map[string]*slot)
 		g.live[object] = profiles
 	}
-	if earlier, running := profiles[profile]; running {
-		profiles[profile] = &d
-		return false, earlier
+	if running, ok := profiles[profile]; ok {
+		replaced := running.held
+		running.held = &d
+		running.at = now
+		return false, replaced
 	}
-	profiles[profile] = nil
+	profiles[profile] = &slot{at: now}
 	return true, nil
 }
 
@@ -418,19 +446,21 @@ func (g *gate) release(object, profile string) *held {
 	if !ok {
 		return nil
 	}
-	d, ok := profiles[profile]
+	s, ok := profiles[profile]
 	if !ok {
 		return nil
 	}
-	if d == nil {
+	next := s.held
+	if next == nil {
 		delete(profiles, profile)
 	} else {
-		profiles[profile] = nil
+		s.held = nil
+		s.at = g.now()
 	}
 	if len(profiles) == 0 {
 		delete(g.live, object)
 	}
-	return d
+	return next
 }
 
 // drop frees the key whatever is held for it, for a run that never started.
@@ -444,6 +474,27 @@ func (g *gate) drop(object, profile string) {
 	delete(profiles, profile)
 	if len(profiles) == 0 {
 		delete(g.live, object)
+	}
+}
+
+// sweep counts one claim and, on every sweepEvery-th, frees the keys whose run
+// has not exited and that no delivery has reached for the TTL. A key holding a
+// delivery is kept, because nothing else records that wake.
+func (g *gate) sweep() {
+	g.holds++
+	if g.holds%sweepEvery != 0 {
+		return
+	}
+	now := g.now()
+	for object, profiles := range g.live {
+		for profile, s := range profiles {
+			if s.held == nil && now.Sub(s.at) >= g.ttl {
+				delete(profiles, profile)
+			}
+		}
+		if len(profiles) == 0 {
+			delete(g.live, object)
+		}
 	}
 }
 
@@ -668,11 +719,22 @@ func isLoginByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '-'
 }
 
-// counter is an in-memory cap per key.
+// counter is an in-memory cap per key. A key no delivery has reached for the
+// TTL is forgotten, so a pull request or a branch nobody is working any more
+// costs nothing.
 type counter struct {
 	mu    sync.Mutex
 	limit int
-	count map[string]int
+	ttl   time.Duration
+	now   func() time.Time
+	ops   int
+	count map[string]entry
+}
+
+// entry is one key's count and the moment a delivery last reached it.
+type entry struct {
+	n  int
+	at time.Time
 }
 
 // pullRequestKey names one pull request's entry in a counter.
@@ -685,32 +747,65 @@ func branchKey(repository, branch string) string {
 	return repository + "@" + branch
 }
 
-func newCounter(limit int) *counter {
-	return &counter{limit: limit, count: make(map[string]int)}
+func newCounter(limit int, ttl time.Duration, now func() time.Time) *counter {
+	return &counter{limit: limit, ttl: ttl, now: now, count: make(map[string]entry)}
 }
 
-// reached reports whether the key's count has reached the counter's limit.
+// reached reports whether the key's count has reached the counter's limit. It
+// reaches the key, so a cap still refuses while its deliveries keep arriving
+// and is forgotten only once the TTL has passed without one.
 func (c *counter) reached(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.count[key] >= c.limit
+	c.sweep()
+	e, ok := c.count[key]
+	if !ok {
+		return false
+	}
+	e.at = c.now()
+	c.count[key] = e
+	return e.n >= c.limit
 }
 
 // add records one event for the key.
 func (c *counter) add(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.count[key] < c.limit {
-		c.count[key]++
+	c.sweep()
+	now := c.now()
+	e, ok := c.count[key]
+	if !ok {
+		e = entry{at: now}
+	}
+	if e.n < c.limit {
+		e.n++
+	}
+	e.at = now
+	c.count[key] = e
+}
+
+// sweep counts one operation and, on every sweepEvery-th, forgets the keys the
+// TTL has passed, so no delivery pays for a scan of the whole counter.
+func (c *counter) sweep() {
+	c.ops++
+	if c.ops%sweepEvery != 0 {
+		return
+	}
+	now := c.now()
+	for key, e := range c.count {
+		if now.Sub(e.at) >= c.ttl {
+			delete(c.count, key)
+		}
 	}
 }
 
 // seen is the in-memory delivery-id cache.
 type seen struct {
-	mu  sync.Mutex
-	ttl time.Duration
-	now func() time.Time
-	ids map[string]time.Time
+	mu   sync.Mutex
+	ttl  time.Duration
+	now  func() time.Time
+	adds int
+	ids  map[string]time.Time
 }
 
 func newSeen(ttl time.Duration, now func() time.Time) *seen {
@@ -724,14 +819,38 @@ func (s *seen) has(id string) bool {
 	return ok && s.now().Sub(at) < s.ttl
 }
 
+// add records the delivery and, on every sweepEvery-th, forgets the ids the TTL
+// has passed. The sweep is of a snapshot, taken under the lock and dropped
+// without it, so the cost of a delivery does not grow with the cache.
 func (s *seen) add(id string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := s.now()
+	s.ids[id] = now
+	s.adds++
+	if s.adds%sweepEvery != 0 {
+		s.mu.Unlock()
+		return
+	}
+	snapshot := make(map[string]time.Time, len(s.ids))
 	for key, at := range s.ids {
+		snapshot[key] = at
+	}
+	s.mu.Unlock()
+
+	stale := make([]string, 0, len(snapshot))
+	for key, at := range snapshot {
 		if now.Sub(at) >= s.ttl {
+			stale = append(stale, key)
+		}
+	}
+	if len(stale) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, key := range stale {
+		if at, ok := s.ids[key]; ok && now.Sub(at) >= s.ttl {
 			delete(s.ids, key)
 		}
 	}
-	s.ids[id] = now
 }

@@ -2611,3 +2611,144 @@ func TestSeenExpires(t *testing.T) {
 		t.Fatal("a delivery is still seen after the TTL")
 	}
 }
+
+// sweepCounter drives a counter past the operation its next sweep falls on,
+// whatever operation it was last on.
+func sweepCounter(c *counter) {
+	for i := 0; i < sweepEvery; i++ {
+		c.add(fmt.Sprintf("aivara-se/dispatch#%d", 1000+i))
+	}
+}
+
+// TestCounterForgetsAnUntouchedKey pins the sweep: a key nothing has reached
+// for the TTL costs nothing, so a pull request or a branch one delivery named
+// does not stay in memory.
+func TestCounterForgetsAnUntouchedKey(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	c := newCounter(MaxRounds, time.Hour, func() time.Time { return now })
+
+	for i := 0; i < MaxRounds; i++ {
+		c.add("aivara-se/dispatch#105")
+	}
+	if !c.reached("aivara-se/dispatch#105") {
+		t.Fatal("ten rounds did not reach the cap")
+	}
+
+	now = now.Add(time.Hour)
+	sweepCounter(c)
+	if c.reached("aivara-se/dispatch#105") {
+		t.Fatal("a count was still reached after the TTL")
+	}
+}
+
+// TestCounterStillRefusesAtItsLimitAfterASweep pins the other half: a key its
+// deliveries keep reaching keeps its count, so a sweep cannot grant a capped
+// pull request ten more rounds.
+func TestCounterStillRefusesAtItsLimitAfterASweep(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	c := newCounter(MaxRounds, time.Hour, func() time.Time { return now })
+
+	const key = "aivara-se/dispatch#105"
+	for i := 0; i < MaxRounds; i++ {
+		c.add(key)
+	}
+	for round := 0; round < 3; round++ {
+		now = now.Add(50 * time.Minute)
+		if !c.reached(key) {
+			t.Fatalf("round %d: the cap stopped refusing", round)
+		}
+		sweepCounter(c)
+		if !c.reached(key) {
+			t.Fatalf("round %d: a sweep forgot a key a delivery had just reached", round)
+		}
+	}
+}
+
+// TestSeenForgetsOnASnapshot pins the sweep the cache takes in place of a scan
+// of the whole map under the lock on every add.
+func TestSeenForgetsOnASnapshot(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	cache := newSeen(time.Hour, func() time.Time { return now })
+
+	cache.add("old")
+	now = now.Add(time.Hour)
+	for i := 0; i < sweepEvery; i++ {
+		cache.add(fmt.Sprintf("d%d", i))
+	}
+
+	if _, ok := cache.ids["old"]; ok {
+		t.Fatal("an id past the TTL survived the sweep")
+	}
+	if len(cache.ids) != sweepEvery {
+		t.Fatalf("cached ids = %d, want %d", len(cache.ids), sweepEvery)
+	}
+	if !cache.has("d0") {
+		t.Fatal("a fresh id was forgotten")
+	}
+}
+
+// TestGateFreesAKeyItsRunNeverReleased pins the sweep over the gate: a run that
+// never exits no longer pins its object for the life of the process.
+func TestGateFreesAKeyItsRunNeverReleased(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	g := newGate(time.Hour, func() time.Time { return now })
+
+	const object = "aivara-se/dispatch#105"
+	if free, _ := g.hold(object, "meme", held{delivery: "d1", reason: "first"}); !free {
+		t.Fatal("a free key was not claimed")
+	}
+
+	now = now.Add(time.Hour)
+	for i := 0; i < sweepEvery; i++ {
+		g.hold(fmt.Sprintf("aivara-se/dispatch#%d", 1000+i), "meme", held{delivery: "d", reason: "other"})
+	}
+	if free, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); !free {
+		t.Fatal("an abandoned key was not freed")
+	}
+}
+
+// TestGateKeepsADeliveryHeldPastTheTTL pins the wake the gate exists for: a
+// delivery held behind a run is not swept, and the release its run's exit makes
+// still starts it.
+func TestGateKeepsADeliveryHeldPastTheTTL(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	g := newGate(time.Hour, func() time.Time { return now })
+
+	const object = "aivara-se/dispatch#105"
+	g.hold(object, "meme", held{delivery: "d1", reason: "first"})
+	if free, _ := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); free {
+		t.Fatal("a busy key was claimed twice")
+	}
+
+	now = now.Add(2 * time.Hour)
+	for i := 0; i < sweepEvery; i++ {
+		g.hold(fmt.Sprintf("aivara-se/dispatch#%d", 1000+i), "meme", held{delivery: "d", reason: "other"})
+	}
+	next := g.release(object, "meme")
+	if next == nil || next.delivery != "d2" {
+		t.Fatalf("release returned %+v, want the held delivery d2", next)
+	}
+}
+
+// TestCountsStayFlatAcrossDeliveries pins the shape of the fix: a thousand
+// deliveries naming a thousand pull requests leave a bounded map, not an entry
+// per delivery.
+func TestCountsStayFlatAcrossDeliveries(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	recorder := &memAudit{}
+	rc := newWithClock([]byte(testSecret), map[string]string{"thani-sh-meme": "meme"}, &stubRunner{}, recorder, func() time.Time { return now })
+
+	const deliveries = 1000
+	for i := 0; i < deliveries; i++ {
+		if i%100 == 0 {
+			now = now.Add(time.Hour)
+		}
+		body := changesBodyOn(i, "submitted", "changes_requested", "thani-sh", "thani-sh-meme")
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("delivery %d: status = %d, want 202", i, w.Code)
+		}
+	}
+	if n := len(rc.rounds.count); n > 2*sweepEvery {
+		t.Fatalf("round counts = %d after %d distinct pull requests, want at most %d", n, deliveries, 2*sweepEvery)
+	}
+}

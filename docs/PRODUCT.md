@@ -182,3 +182,9 @@ v1.15 is done when each of these holds, and each is checkable by the operator.
 - **v1.13** — the service's own boot reaches the audit, so a restart is visible and the moment a count was lost is marked ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
 - **v1.14** — every wake's session is tagged `dispatch`, so the service's own runs are one filter in the session list ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).
 - **v1.15** — one run at a time per pull request or branch and agent: a delivery that lands on a key whose run is live is held, and its exit starts one follow-up, so two partial reviews of one head cannot be published ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)).
+
+## Roadmap
+
+Not built. Each line is decided and unbuilt; the present tense of this document still describes v1.15.
+
+- **v1.16** — a wake resumes the session it left for the same pull request or branch, so an agent answering a later round keeps the reasoning of the rounds before it instead of re-deriving it ([`022`](adrs/022-a-wake-resumes-its-objects-session.md)).

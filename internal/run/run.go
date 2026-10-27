@@ -18,10 +18,12 @@ func New(path string) *Runner {
 }
 
 // Start launches `hermes --profile <profile> chat -q "<reason>" --source
-// tool`, waits on the child from its own goroutine, and reports the exit
-// status once. An error means the child did not start.
-func (r *Runner) Start(profile, reason string, onExit func(exit int)) error {
-	cmd := exec.Command(r.path, "--profile", profile, "chat", "-q", reason, "--source", "tool")
+// tool -c "<title>" --create-if-missing`, waits on the child from its own
+// goroutine, and reports the exit status once. The title names the session the
+// run resumes, created when it does not exist. An error means the child did not
+// start.
+func (r *Runner) Start(profile, reason, title string, onExit func(exit int)) error {
+	cmd := exec.Command(r.path, "--profile", profile, "chat", "-q", reason, "--source", "tool", "-c", title, "--create-if-missing")
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start hermes: %w", err)
 	}

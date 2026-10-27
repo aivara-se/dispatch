@@ -17,6 +17,7 @@ const MaxSize = 10 << 20
 const (
 	Started     = "started"
 	Held        = "held"
+	Superseded  = "superseded"
 	Ignored     = "ignored"
 	Duplicate   = "duplicate"
 	StartFailed = "start_failed"
@@ -24,10 +25,12 @@ const (
 
 // Record is one line of the audit. A delivery's line carries the delivery and
 // what the service did with it — `held` when a run already holds its key, whose
-// follow-up appends a line of its own carrying the same delivery id
-// ([`021`](docs/adrs/021-one-run-per-pull-request-per-agent.md)); a run's line
-// carries the delivery it was started for, the profile and the exit status; a
-// boot's line carries the service's own start
+// follow-up appends a line of its own carrying the same delivery id, and
+// `superseded` when a later delivery for that key replaces it
+// ([`021`](docs/adrs/021-one-run-per-pull-request-per-agent.md),
+// [`024`](docs/adrs/024-a-superseded-delivery-names-its-replacement.md)); a
+// run's line carries the delivery it was started for, the profile and the exit
+// status; a boot's line carries the service's own start
 // ([`015`](docs/adrs/015-the-audit-records-a-runs-exit.md),
 // [`018`](docs/adrs/018-the-services-boot-reaches-the-audit.md)). It never
 // carries a secret value or a payload body.

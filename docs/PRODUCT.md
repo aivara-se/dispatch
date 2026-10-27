@@ -62,7 +62,7 @@ This is the transition from probe to candidate: the reviewers were woken when th
 
 ## One run at a time
 
-An agent may have several runs at once, but not two over the same object: one pull request or one branch is worked by one agent at a time ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). A delivery that lands while that agent's run on that object is live starts nothing. It is held: when the run exits, one follow-up starts carrying the reason of the most recent delivery held for it, so a burst becomes one run, and the audit pairs the held line with the follow-up's by the delivery id. A held delivery replaces an earlier held one and is traced the same way. Different pull requests do not wait on each other, and neither do two agents on one pull request.
+An agent may have several runs at once, but not two over the same object: one pull request or one branch is worked by one agent at a time ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). A delivery that lands while that agent's run on that object is live starts nothing. It is held: when the run exits, one follow-up starts carrying the reason of the most recent delivery held for it, so a burst becomes one run, and the audit pairs the held line with the follow-up's by the delivery id. A held delivery replaces an earlier held one, which appends a line naming it and starts nothing ([`024`](adrs/024-a-superseded-delivery-names-its-replacement.md)). Different pull requests do not wait on each other, and neither do two agents on one pull request.
 
 The wait buys a whole review instead of half of one. Two runs over one head published two `CHANGES_REQUESTED` reviews 40 s apart, each carrying half the findings, and neither saw the other. What it costs is a review request waiting for the review already running, and a run that never exits holding its key until the process restarts.
 
@@ -160,7 +160,7 @@ v1.16 is done when each of these holds, and each is checkable by the operator.
 - A pull request stops waking anyone once it has had ten reviews that request changes.
 - A delivery that lands while its agent's run on the same pull request is live starts no run, and its line says it was held and the key it waits on.
 - When that run exits, one follow-up run starts carrying the held delivery's reason, and its line carries the held delivery's id.
-- A second delivery held for the same key replaces the first, and the one follow-up carries the latest reason.
+- A second delivery held for the same key replaces the first, the one follow-up carries the latest reason, and the first's line names the delivery that replaced it.
 - Two pull requests of one agent run at once, and so do two agents on one pull request.
 - A run that exits with nothing held behind it starts nothing, and the key is free for the next delivery.
 - Two wakes on one pull request show one session under its title, `aivara-se/dispatch#<n>`, and the second appends to it instead of starting again.

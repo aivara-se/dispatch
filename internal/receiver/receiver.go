@@ -309,6 +309,9 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		}
 	}
 	if free, replaced := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: reason, spend: spend}); !free {
+		if replaced != nil {
+			rc.supersede(object, profile, replaced, rec.Delivery)
+		}
 		rec.Decision = audit.Held
 		rec.Why = heldWhy(object, replaced)
 		return
@@ -365,6 +368,23 @@ func heldWhy(object string, replaced *held) string {
 		return fmt.Sprintf("held for %s", object)
 	}
 	return fmt.Sprintf("held for %s, replacing delivery %s", object, replaced.delivery)
+}
+
+// supersede appends the line the delivery a later one replaced gets: the wake
+// will never run, and the line names the delivery that displaced it. Its `held`
+// line stays as it was appended, so a crash still leaves the trace
+// ([`021`](docs/adrs/021-one-run-per-pull-request-per-agent.md),
+// [`024`](docs/adrs/024-a-superseded-delivery-names-its-replacement.md)).
+func (rc *Receiver) supersede(object, profile string, replaced *held, by string) {
+	rec := audit.Record{
+		Delivery: replaced.delivery,
+		Profile:  profile,
+		Decision: audit.Superseded,
+		Why:      fmt.Sprintf("held for %s, replaced by delivery %s", object, by),
+	}
+	if err := rc.audit.Append(rec); err != nil {
+		log.Printf("dispatch: audit: %v", err)
+	}
 }
 
 // gate holds at most one delivery per object and profile, for as long as that
@@ -564,6 +584,9 @@ func (rc *Receiver) wakeTargets(rec *audit.Record, object string, targets []targ
 			continue
 		}
 		if free, earlier := rc.gate.hold(object, profile, held{delivery: rec.Delivery, reason: t.reason}); !free {
+			if earlier != nil {
+				rc.supersede(object, profile, earlier, rec.Delivery)
+			}
 			waiting = append(waiting, t)
 			if replaced == nil {
 				replaced = earlier

@@ -526,7 +526,14 @@ func TestALaterHeldDeliveryReplacesTheEarlierOne(t *testing.T) {
 	if got := runner.started(); len(got) != 1 {
 		t.Fatalf("runs started = %d, want the first alone", len(got))
 	}
-	if got := recorder.records[2].Why; got != "held for aivara-se/dispatch#105, replacing delivery d2" {
+	replaced := recorder.records[2]
+	if replaced.Delivery != "d2" || replaced.Decision != audit.Superseded {
+		t.Fatalf("replaced line = %+v, want d2 superseded", replaced)
+	}
+	if replaced.Why != "held for aivara-se/dispatch#105, replaced by delivery d3" {
+		t.Fatalf("replaced why = %q, want it to name the delivery that replaced it", replaced.Why)
+	}
+	if got := recorder.records[3].Why; got != "held for aivara-se/dispatch#105, replacing delivery d2" {
 		t.Fatalf("third why = %q, want it to name the delivery it replaced", got)
 	}
 
@@ -549,6 +556,52 @@ func TestALaterHeldDeliveryReplacesTheEarlierOne(t *testing.T) {
 	}
 	if got := recorder.records[len(recorder.records)-1]; got.Delivery != "d3" {
 		t.Fatalf("follow-up line = %+v, want d3 rather than the replaced d2", got)
+	}
+}
+
+// TestAReplacementNamesItselfOnEveryHeldDelivery pins the multi-profile case: a
+// delivery held for two agents is replaced by one that names both, and each
+// superseded delivery gets a line of its own rather than a run.
+func TestAReplacementNamesItselfOnEveryHeldDelivery(t *testing.T) {
+	runner := &liveRunner{}
+	rc, recorder := newReceiver(runner)
+	body := readyBody("thani-sh", "thani-sh-meme", "thani-sh-mama")
+
+	for _, delivery := range []string{"d1", "d2", "d3"} {
+		if w := post(rc, "pull_request", delivery, body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", w.Code)
+		}
+	}
+	if got := runner.started(); len(got) != 2 {
+		t.Fatalf("runs started = %d, want the first delivery's two", len(got))
+	}
+
+	replaced := make(map[string]audit.Record)
+	for _, r := range recorder.records {
+		if r.Decision != audit.Superseded {
+			continue
+		}
+		replaced[r.Profile] = r
+	}
+	if len(replaced) != 2 {
+		t.Fatalf("records = %+v, want one superseded line per held profile", recorder.records)
+	}
+	for _, profile := range []string{"meme", "mama"} {
+		r, ok := replaced[profile]
+		if !ok {
+			t.Fatalf("records = %+v, want %q's held delivery superseded", recorder.records, profile)
+		}
+		if r.Delivery != "d2" {
+			t.Fatalf("superseded line for %q = %+v, want d2", profile, r)
+		}
+		if want := "held for aivara-se/dispatch#105, replaced by delivery d3"; r.Why != want {
+			t.Fatalf("superseded why for %q = %q, want %q", profile, r.Why, want)
+		}
+	}
+	for _, r := range recorder.records {
+		if r.Delivery == "d2" && r.Decision == audit.Started {
+			t.Fatalf("records = %+v, want no run for the replaced d2", recorder.records)
+		}
 	}
 }
 

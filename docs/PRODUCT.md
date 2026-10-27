@@ -181,6 +181,6 @@ v1.16 is done when each of these holds, and each is checkable by the operator.
 - **v1.11** — a mention is read in a review's body and in a review comment, where the review conversation is written ([`016`](adrs/016-a-mention-reads-the-reviews-own-surfaces.md)).
 - **v1.12** — a dismissed review wakes the pull request's author, because the approval the change was waiting on is gone ([`017`](adrs/017-a-dismissed-review-wakes-the-author.md)).
 - **v1.13** — the service's own boot reaches the audit, so a restart is visible and the moment a count was lost is marked ([`018`](adrs/018-the-services-boot-reaches-the-audit.md)).
-- **v1.14** — every wake's session is tagged `dispatch`, so the service's own runs are one filter in the session list ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).
+- **v1.14** — every wake's session is tagged `tool`, so the service's own runs are one filter in the session list ([`019`](adrs/019-every-run-is-tagged-dispatch.md)).
 - **v1.15** — one run at a time per pull request or branch and agent: a delivery that lands on a key whose run is live is held, and its exit starts one follow-up, so two partial reviews of one head cannot be published ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)).
 - **v1.16** — a wake resumes the session it left for the same pull request or branch, so an agent answering a later round keeps the reasoning of the rounds before it instead of re-deriving it ([`022`](adrs/022-a-wake-resumes-its-objects-session.md)).

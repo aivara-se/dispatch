@@ -64,7 +64,7 @@ This is the transition from probe to candidate: the reviewers were woken when th
 
 An agent may have several runs at once, but not two over the same object: one pull request or one branch is worked by one agent at a time ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). A delivery that lands while that agent's run on that object is live starts nothing. It is held: when the run exits, one follow-up starts carrying the reason of the most recent delivery held for it, so a burst becomes one run, and the audit pairs the held line with the follow-up's by the delivery id. A held delivery replaces an earlier held one and is traced the same way. Different pull requests do not wait on each other, and neither do two agents on one pull request.
 
-The wait buys a whole review instead of half of one. Two runs over one head published two `CHANGES_REQUESTED` reviews 40 s apart, each carrying half the findings, and neither saw the other. What it costs is a review request waiting for the review already running, and a run that never exits holding its key until the process restarts.
+The wait buys a whole review instead of half of one. Two runs over one head published two `CHANGES_REQUESTED` reviews 40 s apart, each carrying half the findings, and neither saw the other. What it costs is a review request waiting for the review already running, and a run that never exits holding its key for an hour with nothing behind it — or until the process restarts, while a delivery waits.
 
 ## What it never does
 
@@ -110,7 +110,7 @@ Known, and deliberately not handled in this version. Each is a wake that does no
 - **A failing run on the default branch that is not a push.** A schedule, a dispatch or another workflow wakes nobody.
 - **A flaky check.** It spends the failure budget as surely as a real break; the count does not know the difference.
 - **A failing run that names several pull requests.** One run starts, carrying the first pull request's number; the others are named only when a later run fails.
-- **A run that never exits.** Its key is freed an hour after the last delivery reached it, so a second run can start over the same object while the first may still be going.
+- **A run that never exits.** Its key is freed an hour after the last delivery reached it, unless a delivery is held for it: a held wake stays claimed until a restart, and a key nothing waits behind lets a second run start over the same object while the first may still be going.
 - **A crash between a held delivery and its follow-up.** The held line is the trace of a wake that did not happen.
 - **A restart.** A boot line marks it and every count starts over, so a redelivery inside the lost hour can wake the agent twice.
 

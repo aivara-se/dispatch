@@ -119,7 +119,16 @@ func sign(body string) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-func post(rc *Receiver, event, delivery, body string, signature string) *httptest.ResponseRecorder {
+// post delivers body for one delivery id, with the id stamped into the bytes
+// first: GitHub sends different bytes for each delivery, and `024` keys the
+// dedup on them, so a fixture posted under many ids is many bodies.
+func post(rc *Receiver, event, delivery, body string) *httptest.ResponseRecorder {
+	stamped := stamp(body, delivery)
+	return postSigned(rc, event, delivery, stamped, sign(stamped))
+}
+
+// postSigned delivers exactly the bytes and the signature it is given.
+func postSigned(rc *Receiver, event, delivery, body, signature string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/github", strings.NewReader(body))
 	if event != "" {
 		req.Header.Set("X-GitHub-Event", event)
@@ -133,6 +142,15 @@ func post(rc *Receiver, event, delivery, body string, signature string) *httptes
 	w := httptest.NewRecorder()
 	rc.ServeHTTP(w, req)
 	return w
+}
+
+// stamp writes a delivery id into a JSON body, so two deliveries of one fixture
+// are not the same bytes; a body that is not a JSON object is left alone.
+func stamp(body, delivery string) string {
+	if delivery == "" || !strings.HasPrefix(body, "{") {
+		return body
+	}
+	return fmt.Sprintf(`{"delivery": %q, %s`, delivery, body[1:])
 }
 
 const testRepo = "aivara-se/dispatch"
@@ -353,7 +371,7 @@ func TestSignatureRefusedBeforeParsing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rc, recorder := newReceiver(&stubRunner{})
-			w := post(rc, "pull_request", "d1", body, tc.signature)
+			w := postSigned(rc, "pull_request", "d1", body, tc.signature)
 
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", w.Code)
@@ -369,7 +387,7 @@ func TestBodyRefusedBeforeDecision(t *testing.T) {
 	t.Run("oversized", func(t *testing.T) {
 		rc, recorder := newReceiver(&stubRunner{})
 		body := strings.Repeat("a", MaxBody+1)
-		w := post(rc, "pull_request", "d1", body, sign(body))
+		w := post(rc, "pull_request", "d1", body)
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400", w.Code)
@@ -382,7 +400,7 @@ func TestBodyRefusedBeforeDecision(t *testing.T) {
 	t.Run("not json", func(t *testing.T) {
 		rc, recorder := newReceiver(&stubRunner{})
 		body := `payload={"action":"review_requested"}`
-		w := post(rc, "pull_request", "d1", body, sign(body))
+		w := post(rc, "pull_request", "d1", body)
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400", w.Code)
@@ -408,7 +426,7 @@ func TestEventFilter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
-			w := post(rc, tc.event, "d1", tc.body, sign(tc.body))
+			w := post(rc, tc.event, "d1", tc.body)
 
 			if w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
@@ -429,7 +447,7 @@ func TestDedup(t *testing.T) {
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
 	for i := 0; i < 2; i++ {
-		if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", w.Code)
 		}
 	}
@@ -445,13 +463,68 @@ func TestDedup(t *testing.T) {
 	}
 }
 
+// TestAReplayUnderAFreshDeliveryIdIsDuplicate pins `024`: the dedup key is the
+// bytes the signature covers, so accepted bytes posted again under new ids
+// start one run and are answered duplicate.
+func TestAReplayUnderAFreshDeliveryIdIsDuplicate(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
+
+	for _, delivery := range []string{"d1", "d2", "d3"} {
+		if w := postSigned(rc, "pull_request", delivery, body, sign(body)); w.Code != http.StatusAccepted {
+			t.Fatalf("%s: status = %d, want 202", delivery, w.Code)
+		}
+	}
+
+	if len(runner.calls) != 1 {
+		t.Fatalf("runs started = %d, want 1", len(runner.calls))
+	}
+	if len(recorder.records) != 3 {
+		t.Fatalf("audit records = %d, want 3", len(recorder.records))
+	}
+	for _, i := range []int{1, 2} {
+		if got := recorder.records[i].Decision; got != audit.Duplicate {
+			t.Fatalf("record %d decision = %q, want duplicate", i, got)
+		}
+	}
+}
+
+// TestOneDeliveryIdWithTwoBodiesRecordsBoth pins `024`'s other edge: a genuine
+// redelivery whose payload was corrected carries the same id, so the id is not
+// the key and both bodies act.
+func TestOneDeliveryIdWithTwoBodiesRecordsBoth(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	first := reviewBodyOn(105, "review_requested", "thani-sh", "thani-sh-meme")
+	second := reviewBodyOn(106, "review_requested", "thani-sh", "thani-sh-meme")
+
+	for _, body := range []string{first, second} {
+		if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", w.Code)
+		}
+	}
+
+	if len(runner.calls) != 2 {
+		t.Fatalf("runs started = %d, want 2", len(runner.calls))
+	}
+	if len(recorder.records) != 2 {
+		t.Fatalf("audit records = %d, want 2", len(recorder.records))
+	}
+	for i, record := range recorder.records {
+		if record.Decision != audit.Started {
+			t.Fatalf("record %d decision = %q, want started", i, record.Decision)
+		}
+	}
+}
+
 func TestIssueAssignmentDedup(t *testing.T) {
 	runner := &stubRunner{}
 	rc, recorder := newReceiver(runner)
 	body := issueBody("assigned", "thani-sh", "thani-sh-meme")
 
 	for i := 0; i < 2; i++ {
-		if w := post(rc, "issues", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "issues", "d1", body); w.Code != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", w.Code)
 		}
 	}
@@ -473,7 +546,7 @@ func TestSecondRequestIsHeldWhileTheFirstRuns(t *testing.T) {
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
 	for _, delivery := range []string{"d1", "d2"} {
-		if w := post(rc, "pull_request", delivery, body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request", delivery, body); w.Code != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", w.Code)
 		}
 	}
@@ -519,7 +592,7 @@ func TestALaterHeldDeliveryReplacesTheEarlierOne(t *testing.T) {
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
 	for _, delivery := range []string{"d1", "d2", "d3"} {
-		if w := post(rc, "pull_request", delivery, body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request", delivery, body); w.Code != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", w.Code)
 		}
 	}
@@ -559,7 +632,7 @@ func TestExitWithNothingHeldFreesTheKey(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	runner.exit(0, 0)
@@ -571,7 +644,7 @@ func TestExitWithNothingHeldFreesTheKey(t *testing.T) {
 		t.Fatalf("audit records = %+v, want the delivery's line alone", recorder.records)
 	}
 
-	if w := post(rc, "pull_request", "d2", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d2", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if got := runner.started(); len(got) != 2 {
@@ -604,7 +677,7 @@ func TestCapsCountFollowUpRuns(t *testing.T) {
 			next := 0
 			for i := 1; i <= MaxFailures*2; i++ {
 				for _, delivery := range []string{fmt.Sprintf("d%da", i), fmt.Sprintf("d%db", i)} {
-					if w := post(rc, "workflow_run", delivery, tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+					if w := post(rc, "workflow_run", delivery, tc.body); w.Code != http.StatusAccepted {
 						t.Fatalf("%s: status = %d, want 202", delivery, w.Code)
 					}
 				}
@@ -633,7 +706,7 @@ func TestTheGateIsPerObject(t *testing.T) {
 
 	for _, number := range []int{105, 106} {
 		body := reviewBodyOn(number, "review_requested", "thani-sh", "thani-sh-meme")
-		if w := post(rc, "pull_request", fmt.Sprintf("d%d", number), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request", fmt.Sprintf("d%d", number), body); w.Code != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", w.Code)
 		}
 	}
@@ -650,7 +723,7 @@ func TestTheGateIsPerAgent(t *testing.T) {
 	rc, _ := newReceiver(runner)
 	body := commentBody(105, "created", "MEMBER", "thani-sh", "@thani-sh-meme and @thani-sh-mama")
 
-	if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 
@@ -664,7 +737,7 @@ func TestActorIsNeverWoken(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewBody("review_requested", "thani-sh-meme", "thani-sh-meme")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != 0 {
@@ -680,7 +753,7 @@ func TestChangesRequestedWakesAuthor(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
@@ -706,7 +779,7 @@ func TestIssueAssignmentWakesAssignee(t *testing.T) {
 		"sender": {"login": "thani-sh"}
 	}`
 
-	if w := post(rc, "issues", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "issues", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "meme", reason: "Dispatch: issue assigned on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"}
@@ -733,7 +806,7 @@ func TestPullRequestAssignmentWakesAssignee(t *testing.T) {
 		"sender": {"login": "thani-sh"}
 	}`
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "meme", reason: "Dispatch: pull request assigned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
@@ -763,7 +836,7 @@ func TestPullRequestAssignmentWakesNobody(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, "pull_request", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "pull_request", "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -784,7 +857,7 @@ func TestFailedCheckWakesPusher(t *testing.T) {
 	// requests in one run: the first is the pointer, and only one run starts.
 	body := workflowRunBody("completed", "failure", "thani-sh-meme", 105, 106)
 
-	if w := post(rc, "workflow_run", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
@@ -817,7 +890,7 @@ func TestFailedCheckWakesNobody(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, "workflow_run", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "workflow_run", "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -837,13 +910,13 @@ func TestFailedCheckStopsAfterFiveWakes(t *testing.T) {
 
 	// A failure that wakes nobody spends no budget.
 	unconfigured := workflowRunBody("completed", "failure", "thani-sh-missing", 105)
-	if w := post(rc, "workflow_run", "unconfigured", unconfigured, sign(unconfigured)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "unconfigured", unconfigured); w.Code != http.StatusAccepted {
 		t.Fatalf("unconfigured: status = %d, want 202", w.Code)
 	}
 
 	body := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
 	for i := 1; i <= MaxFailures; i++ {
-		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), body); w.Code != http.StatusAccepted {
 			t.Fatalf("wake %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -851,7 +924,7 @@ func TestFailedCheckStopsAfterFiveWakes(t *testing.T) {
 		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures)
 	}
 
-	if w := post(rc, "workflow_run", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "capped", body); w.Code != http.StatusAccepted {
 		t.Fatalf("sixth: status = %d, want 202", w.Code)
 	}
 	last := recorder.records[len(recorder.records)-1]
@@ -871,14 +944,14 @@ func TestFailedChecksDoNotSpendTheReviewCap(t *testing.T) {
 	failure := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
 
 	for i := 1; i <= MaxFailures; i++ {
-		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), failure, sign(failure)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), failure); w.Code != http.StatusAccepted {
 			t.Fatalf("failure %d: status = %d, want 202", i, w.Code)
 		}
 	}
 
 	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -895,13 +968,13 @@ func TestFailedCheckIsNotBlockedByTheReviewCap(t *testing.T) {
 	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 
 	failure := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
-	if w := post(rc, "workflow_run", "failure", failure, sign(failure)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "failure", failure); w.Code != http.StatusAccepted {
 		t.Fatalf("failure: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -916,7 +989,7 @@ func TestRedMainWakesItsPusher(t *testing.T) {
 	// pull request too.
 	body := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
 
-	if w := post(rc, "workflow_run", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "meme", reason: "Dispatch: checks failed on aivara-se/dispatch@main", title: "aivara-se/dispatch@main"}
@@ -949,7 +1022,7 @@ func TestRedMainWakesNobody(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, "workflow_run", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "workflow_run", "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -969,13 +1042,13 @@ func TestRedMainStopsAfterFiveWakes(t *testing.T) {
 
 	// A failure that wakes nobody spends no budget.
 	unconfigured := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-missing")
-	if w := post(rc, "workflow_run", "unconfigured", unconfigured, sign(unconfigured)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "unconfigured", unconfigured); w.Code != http.StatusAccepted {
 		t.Fatalf("unconfigured: status = %d, want 202", w.Code)
 	}
 
 	body := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
 	for i := 1; i <= MaxFailures; i++ {
-		if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), body); w.Code != http.StatusAccepted {
 			t.Fatalf("wake %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -983,7 +1056,7 @@ func TestRedMainStopsAfterFiveWakes(t *testing.T) {
 		t.Fatalf("runs started = %d, want %d", len(runner.calls), MaxFailures)
 	}
 
-	if w := post(rc, "workflow_run", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "capped", body); w.Code != http.StatusAccepted {
 		t.Fatalf("sixth: status = %d, want 202", w.Code)
 	}
 	last := recorder.records[len(recorder.records)-1]
@@ -1003,13 +1076,13 @@ func TestRedMainCapIsPerRepository(t *testing.T) {
 
 	capped := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
 	for i := 1; i <= MaxFailures; i++ {
-		if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), capped, sign(capped)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), capped); w.Code != http.StatusAccepted {
 			t.Fatalf("wake %d: status = %d, want 202", i, w.Code)
 		}
 	}
 
 	other := pushRunBody("aivara-se/other", "push", "completed", "failure", "main", "main", "thani-sh-meme")
-	if w := post(rc, "workflow_run", "other", other, sign(other)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "other", other); w.Code != http.StatusAccepted {
 		t.Fatalf("other repository: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxFailures+1 {
@@ -1037,7 +1110,7 @@ func TestRedMainCountsOnlyRunsThatNameNoPullRequest(t *testing.T) {
 		"sender": {"login": "thani-sh-meme"}
 	}`, testRepo)
 	for i := 1; i <= MaxFailures; i++ {
-		if w := post(rc, "workflow_run", fmt.Sprintf("n%d", i), named, sign(named)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", fmt.Sprintf("n%d", i), named); w.Code != http.StatusAccepted {
 			t.Fatalf("named run %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -1046,7 +1119,7 @@ func TestRedMainCountsOnlyRunsThatNameNoPullRequest(t *testing.T) {
 	}
 
 	red := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
-	if w := post(rc, "workflow_run", "red", red, sign(red)); w.Code != http.StatusAccepted {
+	if w := post(rc, "workflow_run", "red", red); w.Code != http.StatusAccepted {
 		t.Fatalf("red main: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxFailures+1 {
@@ -1067,12 +1140,12 @@ func TestRedMainCapIsSeparateFromThePullRequestCap(t *testing.T) {
 		red := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
 
 		for i := 1; i <= MaxFailures; i++ {
-			if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), red, sign(red)); w.Code != http.StatusAccepted {
+			if w := post(rc, "workflow_run", fmt.Sprintf("b%d", i), red); w.Code != http.StatusAccepted {
 				t.Fatalf("branch wake %d: status = %d, want 202", i, w.Code)
 			}
 		}
 		pull := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
-		if w := post(rc, "workflow_run", "pull", pull, sign(pull)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", "pull", pull); w.Code != http.StatusAccepted {
 			t.Fatalf("pull request: status = %d, want 202", w.Code)
 		}
 		if len(runner.calls) != MaxFailures+1 {
@@ -1086,12 +1159,12 @@ func TestRedMainCapIsSeparateFromThePullRequestCap(t *testing.T) {
 		pull := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
 
 		for i := 1; i <= MaxFailures; i++ {
-			if w := post(rc, "workflow_run", fmt.Sprintf("p%d", i), pull, sign(pull)); w.Code != http.StatusAccepted {
+			if w := post(rc, "workflow_run", fmt.Sprintf("p%d", i), pull); w.Code != http.StatusAccepted {
 				t.Fatalf("pull request wake %d: status = %d, want 202", i, w.Code)
 			}
 		}
 		red := pushRunBody(testRepo, "push", "completed", "failure", "main", "main", "thani-sh-meme")
-		if w := post(rc, "workflow_run", "branch", red, sign(red)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", "branch", red); w.Code != http.StatusAccepted {
 			t.Fatalf("branch: status = %d, want 202", w.Code)
 		}
 		if len(runner.calls) != MaxFailures+1 {
@@ -1108,7 +1181,7 @@ func TestReviewBodyMentionWakesAgent(t *testing.T) {
 	body := reviewSurfaceBody("submitted", "commented", "MEMBER", "thani-sh", "thani-sh-mama",
 		"@thani-sh-meme, this line is off; @thani-sh-meme again.")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}}
@@ -1128,7 +1201,7 @@ func TestReviewCommentMentionWakesAgent(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewCommentBody("created", "COLLABORATOR", "thani-sh", "@thani-sh-meme is this covered?")
 
-	if w := post(rc, "pull_request_review_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review_comment", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "meme", reason: "Dispatch: mentioned on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
@@ -1149,7 +1222,7 @@ func TestChangesRequestedAndMentionAreOneLine(t *testing.T) {
 	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama",
 		"@thani-sh-meme, this line is off.")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
@@ -1185,7 +1258,7 @@ func TestAuthorMentionedInTheirOwnReviewWakesOnce(t *testing.T) {
 	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama",
 		"@thani-sh-mama, this line is off.")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "mama", reason: "Dispatch: changes requested on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
@@ -1206,7 +1279,7 @@ func TestUnarmedApprovalAndMentionAreOneLine(t *testing.T) {
 	body := reviewSurfaceBody("submitted", "approved", "OWNER", "thani-sh", "thani-sh-mama",
 		"@thani-sh-meme, thanks.")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
@@ -1241,7 +1314,7 @@ func TestReviewMentionNeedsAnAssociation(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, tc.event, "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, tc.event, "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1271,7 +1344,7 @@ func TestReviewSurfacesIgnoreOtherActions(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, tc.event, "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, tc.event, "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1292,7 +1365,7 @@ func TestReviewMentionSkipsItsActor(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewSurfaceBody("submitted", "commented", "MEMBER", "thani-sh-meme", "thani-sh-mama", "@thani-sh-meme")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != 0 {
@@ -1309,7 +1382,7 @@ func TestMentionWakesEachAgentOnce(t *testing.T) {
 	body := commentBody(124, "created", "MEMBER", "thani-sh",
 		"@thani-sh-meme and @Thani-Sh-Mama; @thani-sh-meme again.")
 
-	if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
@@ -1348,7 +1421,7 @@ func TestMentionMatchIsBounded(t *testing.T) {
 			rc, recorder := newReceiver(runner)
 			body := commentBody(124, "created", "MEMBER", "thani-sh", tc.text)
 
-			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if tc.wake {
@@ -1377,7 +1450,7 @@ func TestMentionNeedsAnAssociation(t *testing.T) {
 			rc, _ := newReceiver(runner)
 			body := commentBody(124, "created", association, "thani-sh", text)
 
-			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 1 {
@@ -1392,7 +1465,7 @@ func TestMentionNeedsAnAssociation(t *testing.T) {
 			rc, recorder := newReceiver(runner)
 			body := commentBody(124, "created", association, "thani-sh", text)
 
-			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1411,7 +1484,7 @@ func TestMentionSkipsItsActor(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := commentBody(124, "created", "MEMBER", "thani-sh-meme", "@thani-sh-meme")
 
-	if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != 0 {
@@ -1430,7 +1503,7 @@ func TestMentionIgnoresOtherActions(t *testing.T) {
 			rc, recorder := newReceiver(runner)
 			body := commentBody(124, action, "MEMBER", "thani-sh", "@thani-sh-meme")
 
-			if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1450,7 +1523,7 @@ func TestMentionDedup(t *testing.T) {
 	body := commentBody(124, "created", "MEMBER", "thani-sh", "@thani-sh-meme")
 
 	for i := 0; i < 2; i++ {
-		if w := post(rc, "issue_comment", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "issue_comment", "d1", body); w.Code != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", w.Code)
 		}
 	}
@@ -1470,12 +1543,12 @@ func TestMentionIgnoresTheReviewCap(t *testing.T) {
 	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 	body := commentBody(105, "created", "MEMBER", "thani-sh", "@thani-sh-meme")
-	if w := post(rc, "issue_comment", "mention", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "issue_comment", "mention", body); w.Code != http.StatusAccepted {
 		t.Fatalf("mention: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -1495,12 +1568,12 @@ func TestChangesReviewMentionIgnoresTheReviewCap(t *testing.T) {
 	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama", "@thani-sh-meme look here")
-	if w := post(rc, "pull_request_review", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "capped", body); w.Code != http.StatusAccepted {
 		t.Fatalf("capped review: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -1524,12 +1597,12 @@ func TestCappedChangesReviewNamesTheCap(t *testing.T) {
 	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 	body := reviewSurfaceBody("submitted", "changes_requested", "MEMBER", "thani-sh", "thani-sh-mama", "still not right")
-	if w := post(rc, "pull_request_review", "capped", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "capped", body); w.Code != http.StatusAccepted {
 		t.Fatalf("capped review: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds {
@@ -1546,7 +1619,7 @@ func TestUnarmedApprovalWakesAuthor(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := approvalBody("open", false, "null", "thani-sh-meme", "thani-sh-mama")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "mama", reason: "Dispatch: approved but not armed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
@@ -1568,11 +1641,11 @@ func TestUnarmedApprovalIgnoresTheReviewCap(t *testing.T) {
 	round := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
-	if w := post(rc, "pull_request_review", "capped", round, sign(round)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "capped", round); w.Code != http.StatusAccepted {
 		t.Fatalf("capped round: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds {
@@ -1580,7 +1653,7 @@ func TestUnarmedApprovalIgnoresTheReviewCap(t *testing.T) {
 	}
 
 	body := approvalBody("open", false, "null", "thani-sh-meme", "thani-sh-mama")
-	if w := post(rc, "pull_request_review", "approval", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "approval", body); w.Code != http.StatusAccepted {
 		t.Fatalf("approval: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -1601,7 +1674,7 @@ func TestApprovalsAddNoRounds(t *testing.T) {
 	body := approvalBody("open", false, "null", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("approval%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("approval%d", i), body); w.Code != http.StatusAccepted {
 			t.Fatalf("approval %d: status = %d, want 202", i, w.Code)
 		}
 		if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
@@ -1613,7 +1686,7 @@ func TestApprovalsAddNoRounds(t *testing.T) {
 	}
 
 	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
-	if w := post(rc, "pull_request_review", "round1", round, sign(round)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "round1", round); w.Code != http.StatusAccepted {
 		t.Fatalf("changes requested: status = %d, want 202", w.Code)
 	}
 	if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
@@ -1652,7 +1725,7 @@ func TestApprovalWakesNobody(t *testing.T) {
 			rc, recorder := newReceiver(runner)
 			body := reviewDelivery{tc.action, tc.review, tc.state, tc.draft, tc.autoMerge, tc.sender, tc.author}.body()
 
-			if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1671,7 +1744,7 @@ func TestDismissedReviewWakesAuthor(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := dismissedBody(false, "open", "null", "thani-sh-meme", "thani-sh-mama")
 
-	if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := call{profile: "mama", reason: "Dispatch: approval dismissed on aivara-se/dispatch#105", title: "aivara-se/dispatch#105"}
@@ -1702,7 +1775,7 @@ func TestDismissedReviewWakesNobody(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, "pull_request_review", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "pull_request_review", "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1725,13 +1798,13 @@ func TestDismissalConsultsNeitherCap(t *testing.T) {
 
 	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 	failure := workflowRunBody("completed", "failure", "thani-sh-meme", 105)
 	for i := 1; i <= MaxFailures; i++ {
-		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), failure, sign(failure)); w.Code != http.StatusAccepted {
+		if w := post(rc, "workflow_run", fmt.Sprintf("f%d", i), failure); w.Code != http.StatusAccepted {
 			t.Fatalf("failure %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -1740,7 +1813,7 @@ func TestDismissalConsultsNeitherCap(t *testing.T) {
 	}
 
 	dismissal := dismissedBody(false, "open", "null", "thani-sh-meme", "thani-sh-mama")
-	if w := post(rc, "pull_request_review", "dismissal", dismissal, sign(dismissal)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "dismissal", dismissal); w.Code != http.StatusAccepted {
 		t.Fatalf("dismissal: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+MaxFailures+1 {
@@ -1752,7 +1825,7 @@ func TestDismissalConsultsNeitherCap(t *testing.T) {
 	}
 
 	// The dismissal spent no round: the eleventh review is still refused.
-	if w := post(rc, "pull_request_review", "r11", round, sign(round)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "r11", round); w.Code != http.StatusAccepted {
 		t.Fatalf("eleventh round: status = %d, want 202", w.Code)
 	}
 	last := recorder.records[len(recorder.records)-1]
@@ -1769,7 +1842,7 @@ func TestReadyForReviewWakesReviewers(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := readyBody("thani-sh", "thani-sh-meme", "thani-sh-mama")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	want := []call{
@@ -1812,7 +1885,7 @@ func TestReadyForReviewWakesNobody(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, "pull_request", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "pull_request", "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1831,7 +1904,7 @@ func TestReadyForReviewSkipsItsActorAndRepeats(t *testing.T) {
 	rc, _ := newReceiver(runner)
 	body := readyBody("thani-sh-meme", "thani-sh-meme", "thani-sh-meme", "thani-sh-mama", "thani-sh-mama")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != 1 || runner.calls[0].profile != "mama" {
@@ -1847,12 +1920,12 @@ func TestReadyForReviewIgnoresTheReviewCap(t *testing.T) {
 	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("r%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 	body := readyBody("thani-sh", "thani-sh-meme")
-	if w := post(rc, "pull_request", "ready", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "ready", body); w.Code != http.StatusAccepted {
 		t.Fatalf("ready: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -1882,7 +1955,7 @@ func TestIssueDeliveryWakesNobody(t *testing.T) {
 			runner := &stubRunner{}
 			rc, recorder := newReceiver(runner)
 
-			if w := post(rc, "issues", "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "issues", "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -1908,13 +1981,13 @@ func TestIssueAssignmentIsNotCapped(t *testing.T) {
 	round := changesBodyOn(124, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), round, sign(round)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), round); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 
 	body := issueBodyOn(124, "assigned", "thani-sh", "thani-sh-meme")
-	if w := post(rc, "issues", "assignment", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "issues", "assignment", body); w.Code != http.StatusAccepted {
 		t.Fatalf("assignment: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -1934,7 +2007,7 @@ func TestIssueAssignmentAddsNoRound(t *testing.T) {
 
 	body := issueBodyOn(124, "assigned", "thani-sh", "thani-sh-meme")
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "issues", fmt.Sprintf("a%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "issues", fmt.Sprintf("a%d", i), body); w.Code != http.StatusAccepted {
 			t.Fatalf("assignment %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -1943,7 +2016,7 @@ func TestIssueAssignmentAddsNoRound(t *testing.T) {
 	}
 
 	round := changesBodyOn(124, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
-	if w := post(rc, "pull_request_review", "after-assignments", round, sign(round)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "after-assignments", round); w.Code != http.StatusAccepted {
 		t.Fatalf("review after the assignments: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -1961,7 +2034,7 @@ func TestCapStopsWakingAfterTenRounds(t *testing.T) {
 	body := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), body); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -1979,7 +2052,7 @@ func TestCapStopsWakingAfterTenRounds(t *testing.T) {
 		{"review requested", "pull_request", reviewBody("review_requested", "thani-sh", "thani-sh-meme")},
 	}
 	for i, tc := range capped {
-		if w := post(rc, tc.event, fmt.Sprintf("capped%d", i), tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+		if w := post(rc, tc.event, fmt.Sprintf("capped%d", i), tc.body); w.Code != http.StatusAccepted {
 			t.Fatalf("%s: status = %d, want 202", tc.name, w.Code)
 		}
 		last := recorder.records[len(recorder.records)-1]
@@ -2001,7 +2074,7 @@ func TestOnlyChangesRequestedCountsRounds(t *testing.T) {
 
 	for i := 1; i <= MaxRounds-1; i++ {
 		body := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
-		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), body); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
@@ -2009,13 +2082,13 @@ func TestOnlyChangesRequestedCountsRounds(t *testing.T) {
 	// An approval and a comment add no round, even at the ninth.
 	for i, state := range []string{"approved", "commented"} {
 		body := changesBody("submitted", state, "thani-sh-meme", "thani-sh-mama")
-		if w := post(rc, "pull_request_review", fmt.Sprintf("other%d", i), body, sign(body)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("other%d", i), body); w.Code != http.StatusAccepted {
 			t.Fatalf("%s: status = %d, want 202", state, w.Code)
 		}
 	}
 
 	tenth := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
-	if w := post(rc, "pull_request_review", "d10", tenth, sign(tenth)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "d10", tenth); w.Code != http.StatusAccepted {
 		t.Fatalf("tenth round: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds {
@@ -2035,11 +2108,11 @@ func TestReviewRequestsAddNoRounds(t *testing.T) {
 	round := changesBody("submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 	request := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
-	if w := post(rc, "pull_request_review", "round1", round, sign(round)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "round1", round); w.Code != http.StatusAccepted {
 		t.Fatalf("first round: status = %d, want 202", w.Code)
 	}
 	for i := 1; i <= MaxRounds-1; i++ {
-		if w := post(rc, "pull_request", fmt.Sprintf("request%d", i), request, sign(request)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request", fmt.Sprintf("request%d", i), request); w.Code != http.StatusAccepted {
 			t.Fatalf("review request %d: status = %d, want 202", i, w.Code)
 		}
 		if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
@@ -2051,7 +2124,7 @@ func TestReviewRequestsAddNoRounds(t *testing.T) {
 	}
 
 	// The tenth round still wakes: the review requests spent no count.
-	if w := post(rc, "pull_request_review", "round10", round, sign(round)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request_review", "round10", round); w.Code != http.StatusAccepted {
 		t.Fatalf("tenth round: status = %d, want 202", w.Code)
 	}
 	if got := recorder.records[len(recorder.records)-1].Decision; got != audit.Started {
@@ -2071,13 +2144,13 @@ func TestCapIsPerRepositoryAndNumber(t *testing.T) {
 	capped := changesBodyAt("aivara-se/dispatch", 105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), capped, sign(capped)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), capped); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 
 	other := reviewBodyAt("aivara-se/other", 105, "review_requested", "thani-sh", "thani-sh-meme")
-	if w := post(rc, "pull_request", "other", other, sign(other)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "other", other); w.Code != http.StatusAccepted {
 		t.Fatalf("other repository: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -2094,13 +2167,13 @@ func TestCapIsPerPullRequest(t *testing.T) {
 	capped := changesBodyOn(105, "submitted", "changes_requested", "thani-sh-meme", "thani-sh-mama")
 
 	for i := 1; i <= MaxRounds; i++ {
-		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), capped, sign(capped)); w.Code != http.StatusAccepted {
+		if w := post(rc, "pull_request_review", fmt.Sprintf("d%d", i), capped); w.Code != http.StatusAccepted {
 			t.Fatalf("round %d: status = %d, want 202", i, w.Code)
 		}
 	}
 
 	other := reviewBodyOn(106, "review_requested", "thani-sh", "thani-sh-meme")
-	if w := post(rc, "pull_request", "other", other, sign(other)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "other", other); w.Code != http.StatusAccepted {
 		t.Fatalf("other pull request: status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != MaxRounds+1 {
@@ -2125,7 +2198,7 @@ func TestReviewWithoutChangesWakesNobody(t *testing.T) {
 			rc, recorder := newReceiver(runner)
 			body := changesBody(tc.action, tc.state, "thani-sh-meme", "thani-sh-mama")
 
-			if w := post(rc, "pull_request_review", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+			if w := post(rc, "pull_request_review", "d1", body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 			if len(runner.calls) != 0 {
@@ -2143,7 +2216,7 @@ func TestUnconfiguredReviewerIsIgnored(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-missing")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != 0 {
@@ -2165,7 +2238,7 @@ func TestTeamReviewRequestIsIgnored(t *testing.T) {
 		"sender": {"login": "thani-sh"}
 	}`
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(runner.calls) != 0 {
@@ -2181,7 +2254,7 @@ func TestRunThatCannotStartIsRecorded(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if recorder.records[0].Decision != audit.StartFailed {
@@ -2199,7 +2272,7 @@ func TestRunThatExitsNonZeroAppendsItsOwnLine(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(recorder.records) != 2 {
@@ -2233,7 +2306,7 @@ func TestRunThatExitsZeroAppendsNothing(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(recorder.records) != 1 {
@@ -2251,7 +2324,7 @@ func TestEachRunOfADeliveryReportsItsOwnExit(t *testing.T) {
 	rc, recorder := newReceiver(runner)
 	body := readyBody("thani-sh", "thani-sh-meme", "thani-sh-mama")
 
-	if w := post(rc, "pull_request", "d1", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d1", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	if len(recorder.records) != 3 {
@@ -2510,7 +2583,7 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 			agents := map[string]string{"thani-sh-meme": "meme", "thani-sh-mama": "mama"}
 			rc := New([]byte(testSecret), agents, run.New(os.Args[0]), recorder)
 
-			if w := post(rc, tc.event, "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
+			if w := post(rc, tc.event, "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
 			}
 
@@ -2562,11 +2635,11 @@ func TestAuditLinePerDelivery(t *testing.T) {
 	rc := New([]byte(testSecret), map[string]string{"thani-sh-meme": "meme"}, &stubRunner{}, record)
 
 	ping := `{"zen": "anything"}`
-	if w := post(rc, "ping", "d1", ping, sign(ping)); w.Code != http.StatusAccepted {
+	if w := post(rc, "ping", "d1", ping); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 	body := reviewBody("review_requested", "thani-sh", "thani-sh-meme")
-	if w := post(rc, "pull_request", "d2", body, sign(body)); w.Code != http.StatusAccepted {
+	if w := post(rc, "pull_request", "d2", body); w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Code)
 	}
 
@@ -2601,13 +2674,13 @@ func TestSeenExpires(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	cache := newSeen(time.Hour, func() time.Time { return now })
 
-	cache.add("d1")
-	if !cache.has("d1") {
-		t.Fatal("a delivery added was not seen")
+	cache.add("key")
+	if !cache.has("key") {
+		t.Fatal("a key added was not seen")
 	}
 
 	now = now.Add(time.Hour)
-	if cache.has("d1") {
-		t.Fatal("a delivery is still seen after the TTL")
+	if cache.has("key") {
+		t.Fatal("a key is still seen after the TTL")
 	}
 }

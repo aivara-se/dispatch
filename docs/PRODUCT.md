@@ -101,9 +101,9 @@ Known, and deliberately not handled in this version. Each is a wake that does no
 - **A mention from a bot, a contributor or a first-time commenter.** The association is not the owner's, a member's or a collaborator's, so it wakes nobody even when the login it names is configured.
 - **A mention in a commit comment or in a pull request's or an issue's description.** A comment, a submitted review and an inline review comment are read; nothing else reaches the matcher.
 - **A review and its inline comments are separate deliveries.** A review naming an agent in both its body and a comment starts two runs, and several comments naming the same agent start one run each.
-- **Two approvals dismissed by one push.** The delivery id is the unit of dedupe and the review is the unit of a dismissal, so the author is woken twice.
+- **Two approvals dismissed by one push.** The body is the unit of dedupe and the review is the unit of a dismissal, so the author is woken twice.
 - **A team reviewer on a draft marked ready.** A team is not resolved, so it wakes nobody while the pull request's other reviewers are woken.
-- **Toggling a draft back to ready.** Each return to ready is a new delivery, so the reviewers are woken again; only the delivery-id cache stops a redelivery.
+- **Toggling a draft back to ready.** Each return to ready is a new delivery, so the reviewers are woken again; only the dedup cache stops a redelivery.
 - **The operator pushes to an agent's branch.** The run's actor is the operator, so nobody is woken and the agent is not told its checks failed.
 - **A pull request from a fork.** Its runs are triggered by the forker, who is not a configured login, so a failure wakes nobody.
 - **A failing run on a branch that is neither a pull request's nor the default branch.** The payload names no number and the branch is not the default one, so nobody is woken.

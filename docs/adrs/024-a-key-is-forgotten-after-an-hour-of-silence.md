@@ -12,7 +12,8 @@ The dedup cache is the one structure that prunes, and it pays for it on every ad
 
 - **A key is forgotten after `DedupTTL` without a delivery reaching it.** The TTL is the one `002` fixes for the delivery-id cache, an hour. A round count, a failed-check count, a gate key and a seen delivery id all expire on it.
 - **A reach is a touch.** Each map stamps the key on every delivery that consults it, not only on one that advances a count, so a cap still refuses at its limit and a key is still claimed while deliveries keep arriving. The TTL starts an hour of silence, which a live loop never reaches.
-- **The sweep is off the delivery.** A counter and the gate take their sweep once in 256 touches, under their own lock. The dedup cache snapshots under the lock, scans the snapshot outside it, and then deletes the ids it showed expired, keeping one that was added again while the snapshot was being scanned.
+- **The TTL is tested where the key is read.** A counter's reach and the gate's hold compare the entry's age, so an hour of silence is enforced at the next delivery rather than at the next sweep; a stale count starts over at zero.
+- **The sweep is off the delivery.** A counter and the gate take their sweep once in 256 touches, under their own lock, for the keys no later delivery asks about. The dedup cache snapshots under the lock, scans the snapshot outside it, and then deletes the ids it showed expired, keeping one that was added again while the snapshot was being scanned.
 - **A key with a delivery held for it is not swept.** That delivery is a wake and the gate is the only thing that records it; the run's exit is its release. Only a key with nothing held — a run that has not exited and that no delivery has reached for an hour — is freed.
 - **Nothing becomes durable.** No file, no queue, nothing reconciled at boot: the same maps, each entry carrying the moment it was last reached.
 

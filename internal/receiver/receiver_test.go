@@ -2752,3 +2752,39 @@ func TestCountsStayFlatAcrossDeliveries(t *testing.T) {
 		t.Fatalf("round counts = %d after %d distinct pull requests, want at most %d", n, deliveries, 2*sweepEvery)
 	}
 }
+
+// TestCounterForgetsAKeyOnItsNextReach pins the read: a count an hour silent is
+// zero at the next delivery, whichever sweep has or has not run since.
+func TestCounterForgetsAKeyOnItsNextReach(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	c := newCounter(MaxRounds, time.Hour, func() time.Time { return now })
+
+	const key = "aivara-se/dispatch#105"
+	for i := 0; i < MaxRounds+1; i++ {
+		c.add(key)
+	}
+	now = now.Add(2 * time.Hour)
+	if c.reached(key) {
+		t.Fatal("a count two hours silent still reached the cap")
+	}
+	c.add(key)
+	if c.reached(key) {
+		t.Fatal("a forgotten key started over at its old count")
+	}
+}
+
+// TestGateFreesAKeyOnItsNextHold pins the read on the gate: a run nothing has
+// released does not hold the next delivery behind it past the TTL.
+func TestGateFreesAKeyOnItsNextHold(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	g := newGate(time.Hour, func() time.Time { return now })
+
+	const object = "aivara-se/dispatch#105"
+	if free, _ := g.hold(object, "meme", held{delivery: "d1", reason: "first"}); !free {
+		t.Fatal("a free key was not claimed")
+	}
+	now = now.Add(5 * time.Hour)
+	if free, replaced := g.hold(object, "meme", held{delivery: "d2", reason: "second"}); !free {
+		t.Fatalf("a key five hours silent was still held, replacing %+v", replaced)
+	}
+}

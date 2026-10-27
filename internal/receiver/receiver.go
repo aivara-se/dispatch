@@ -415,7 +415,9 @@ type held struct {
 
 // hold claims the key for a run and reports whether it was free. When it was
 // not, d replaces whatever was held there and the replaced delivery is
-// returned, nil when the earlier one was only running.
+// returned, nil when the earlier one was only running. A key no delivery has
+// reached for the TTL is free, because its run is not coming back to release
+// it.
 func (g *gate) hold(object, profile string, d held) (free bool, replaced *held) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -426,7 +428,7 @@ func (g *gate) hold(object, profile string, d held) (free bool, replaced *held) 
 		profiles = make(map[string]*slot)
 		g.live[object] = profiles
 	}
-	if running, ok := profiles[profile]; ok {
+	if running, ok := profiles[profile]; ok && (running.held != nil || now.Sub(running.at) < g.ttl) {
 		replaced := running.held
 		running.held = &d
 		running.at = now
@@ -758,11 +760,12 @@ func (c *counter) reached(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sweep()
-	e, ok := c.count[key]
+	now := c.now()
+	e, ok := c.live(key, now)
 	if !ok {
 		return false
 	}
-	e.at = c.now()
+	e.at = now
 	c.count[key] = e
 	return e.n >= c.limit
 }
@@ -773,15 +776,27 @@ func (c *counter) add(key string) {
 	defer c.mu.Unlock()
 	c.sweep()
 	now := c.now()
-	e, ok := c.count[key]
+	e, ok := c.live(key, now)
 	if !ok {
-		e = entry{at: now}
+		e = entry{}
 	}
 	if e.n < c.limit {
 		e.n++
 	}
 	e.at = now
 	c.count[key] = e
+}
+
+// live returns the key's entry, forgetting it first when the TTL has passed
+// since a delivery last reached it, so a count starts over rather than comes
+// back.
+func (c *counter) live(key string, now time.Time) (entry, bool) {
+	e, ok := c.count[key]
+	if !ok || now.Sub(e.at) >= c.ttl {
+		delete(c.count, key)
+		return entry{}, false
+	}
+	return e, true
 }
 
 // sweep counts one operation and, on every sweepEvery-th, forgets the keys the

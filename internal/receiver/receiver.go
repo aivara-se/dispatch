@@ -125,6 +125,7 @@ type payload struct {
 }
 
 func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The signature is over these bytes, so the body is read before it can be verified.
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
 	if err != nil {
 		http.Error(w, "body too large", http.StatusBadRequest)

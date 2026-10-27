@@ -11,7 +11,7 @@ The unit, the environment file and the proxy site are `README.md` (*Run it on th
 ## A delivery becomes a run
 
 1. GitHub posts to the public URL; the proxy forwards to the loopback address and path the configuration names ([`004`](adrs/004-configuration.md)).
-2. The receiver reads the raw body up to 1 MiB, then verifies `X-Hub-Signature-256` against the configured secret. Nothing is parsed before it verifies ([`002`](adrs/002-github-webhook-ingestion.md)).
+2. The receiver reads the raw body up to 1 MiB, then verifies `X-Hub-Signature-256` against the configured secret. Nothing is parsed before it verifies ([`002`](adrs/002-github-webhook-ingestion.md)), and the read cannot follow the check, because the HMAC is over the bytes: an unsigned delivery costs one body read and no more ([`023`](adrs/023-an-unsigned-delivery-costs-its-body-read.md)).
 3. It takes the event and the delivery id from the headers, and from the body the action, the repository and its default branch, and — per event — the pull request with its state, draft flag, `auto_merge` and `merged_at`, the requested reviewer or the reviewers still requested, the review's state, body and author association, the pull request's author, the assignee, the issue, the run's actor, event, head branch and the pull requests it names, or the comment's body and author association.
 4. These deliveries act:
    - a `pull_request` delivery whose action is `review_requested`, which wakes the requested reviewer;

@@ -21,7 +21,7 @@ import (
 // MaxBody is the largest delivery body the receiver will read.
 const MaxBody = 1 << 20
 
-// DedupTTL is how long a delivery id is remembered.
+// DedupTTL is how long a body already acted on is remembered.
 const DedupTTL = time.Hour
 
 // MaxRounds is the number of reviews that request changes after which a pull
@@ -164,7 +164,7 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rec.Number = p.WorkflowRun.PullRequests[0].Number
 		}
 	}
-	rc.decide(&rec, &p)
+	rc.decide(&rec, &p, digest(body))
 	if err := rc.audit.Append(rec); err != nil {
 		log.Printf("dispatch: audit: %v", err)
 	}
@@ -186,7 +186,15 @@ func (rc *Receiver) verify(body []byte, header string) bool {
 	return hmac.Equal(got, mac.Sum(nil))
 }
 
-func (rc *Receiver) decide(rec *audit.Record, p *payload) {
+// digest is a body's dedup key: the bytes the signature covers, so a replay of
+// accepted bytes answers duplicate whatever delivery id it carries
+// ([`024`](docs/adrs/024-the-dedup-key-is-the-signed-body.md)).
+func digest(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+func (rc *Receiver) decide(rec *audit.Record, p *payload, key string) {
 	review := rec.Event == "pull_request" && p.Action == "review_requested"
 	changes := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "changes_requested"
 	assigned := (rec.Event == "issues" || rec.Event == "pull_request") && p.Action == "assigned"
@@ -207,12 +215,12 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload) {
 		rec.Why = fmt.Sprintf("event %q with action %q is not a delivery that acts", rec.Event, p.Action)
 		return
 	}
-	if rc.seen.has(rec.Delivery) {
+	if rc.seen.has(key) {
 		rec.Decision = audit.Duplicate
-		rec.Why = "delivery already seen"
+		rec.Why = "the body was accepted before"
 		return
 	}
-	rc.seen.add(rec.Delivery)
+	rc.seen.add(key)
 
 	capped := (review || changes) && rc.rounds.reached(pullRequestKey(rec.Repository, rec.Number))
 	if capped && !mentioned {
@@ -705,33 +713,33 @@ func (c *counter) add(key string) {
 	}
 }
 
-// seen is the in-memory delivery-id cache.
+// seen is the in-memory cache of bodies already acted on, keyed by digest.
 type seen struct {
-	mu  sync.Mutex
-	ttl time.Duration
-	now func() time.Time
-	ids map[string]time.Time
+	mu   sync.Mutex
+	ttl  time.Duration
+	now  func() time.Time
+	keys map[string]time.Time
 }
 
 func newSeen(ttl time.Duration, now func() time.Time) *seen {
-	return &seen{ttl: ttl, now: now, ids: make(map[string]time.Time)}
+	return &seen{ttl: ttl, now: now, keys: make(map[string]time.Time)}
 }
 
-func (s *seen) has(id string) bool {
+func (s *seen) has(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	at, ok := s.ids[id]
+	at, ok := s.keys[key]
 	return ok && s.now().Sub(at) < s.ttl
 }
 
-func (s *seen) add(id string) {
+func (s *seen) add(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
-	for key, at := range s.ids {
+	for k, at := range s.keys {
 		if now.Sub(at) >= s.ttl {
-			delete(s.ids, key)
+			delete(s.keys, k)
 		}
 	}
-	s.ids[id] = now
+	s.keys[key] = now
 }

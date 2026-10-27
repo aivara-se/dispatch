@@ -16,7 +16,7 @@ When a pull request asks an agent to review it, the service wakes that agent. A 
 
 When a review requests changes, the service wakes the pull request's author. The author updates the branch and asks for the review again, which wakes the reviewer. That is the loop. An approval lands the change and wakes nobody; an approval that lands nothing — on a pull request that is open, not a draft and not armed — wakes its author ([`012`](adrs/012-an-approval-that-lands-nothing-wakes-the-author.md)). A review that only comments wakes nobody. An approval spends no round, and the cap does not refuse one.
 
-The loop is capped at ten rounds. A round is a review that requests changes. When a pull request reaches ten, a further review request or changes-requested review on it wakes nobody, so a disagreement cannot run forever. The count belongs to the pull request and lives in memory.
+The loop is capped at ten rounds. A round is a review that requests changes. When a pull request reaches ten, a further review request or changes-requested review on it wakes nobody, so a disagreement cannot run forever. The count belongs to the pull request, lives in memory, and is forgotten after an hour without a delivery ([`024`](adrs/024-a-key-is-forgotten-after-an-hour-of-silence.md)).
 
 Every agent reviews. A review is not a card and never takes a developer's slot, and a reviewer never pushes to a peer's branch: the author applies every change.
 
@@ -84,7 +84,7 @@ The wait buys a whole review instead of half of one. Two runs over one head publ
 - Not a mention parser. It matches an exact login and does not read Markdown, so a mention inside a code block, a quotation or a sentence about an agent still matches.
 - Not a resolver of teams. A review requested from a team wakes nobody, whatever the event.
 - Not a run's biographer. The audit records that a run exited non-zero and never what it said.
-- Not a durable cap. The counts die with the process, and a boot line marks where.
+- Not a durable cap. The counts die with the process or an hour after their last delivery, and a boot line marks where.
 - Not a deployment step. A merge is the repository's own pipeline's business.
 
 ## Edge cases v1.16 leaves unhandled
@@ -110,7 +110,7 @@ Known, and deliberately not handled in this version. Each is a wake that does no
 - **A failing run on the default branch that is not a push.** A schedule, a dispatch or another workflow wakes nobody.
 - **A flaky check.** It spends the failure budget as surely as a real break; the count does not know the difference.
 - **A failing run that names several pull requests.** One run starts, carrying the first pull request's number; the others are named only when a later run fails.
-- **A run that never exits.** Its key stays held until the process restarts, so that agent's wakes for that object stop arriving.
+- **A run that never exits.** Its key is freed an hour after the last delivery reached it, so a second run can start over the same object while the first may still be going.
 - **A crash between a held delivery and its follow-up.** The held line is the trace of a wake that did not happen.
 - **A restart.** A boot line marks it and every count starts over, so a redelivery inside the lost hour can wake the agent twice.
 

@@ -78,6 +78,7 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 - **In memory, and only there:** the delivery-id cache for the TTL `002` fixes, each pull request's round count ([`007`](adrs/007-the-review-cap.md)), its failed-check count ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)) and each repository and branch's failed-check count ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)), one key per live run and the single delivery held for it ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)), and the configuration and secret resolved at boot.
 - **On disk:** the audit file alone — one JSON Lines line per delivery, one per run that ended non-zero, one per boot, and one per follow-up that started, appended and size-rotated ([`005`](adrs/005-the-audit-record.md), [`015`](adrs/015-the-audit-records-a-runs-exit.md), [`018`](adrs/018-the-services-boot-reaches-the-audit.md), [`021`](adrs/021-one-run-per-pull-request-per-agent.md)).
+- **Every one of those keys is forgotten** after `DedupTTL` without a delivery reaching it, on a sweep that runs once in 256 touches, so a name a delivery carried costs memory for an hour and not for the life of the process ([`024`](adrs/024-a-key-is-forgotten-after-an-hour-of-silence.md)). A key with a delivery held for it is never swept.
 - **Nothing else.** No database, no queue, no ordering of events, and no state reconciled after a restart.
 
 ## Failure modes
@@ -88,7 +89,7 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 - **A delivery with nobody to wake** — a team in place of a login, a comment, review or review comment whose author is not the owner, a member or a collaborator, an unconfigured login: `202`, and the line names which of them it was. An approval on a draft or an armed pull request, and a dismissal on a draft, a closed or a merged one, is refused the same way, but its line names no condition: it is logged as an event and an action that do not act.
 - **A repeat** — `202`, and nobody is woken; the line shows it was seen.
 - **A delivery behind a live key** — `202`, and nothing starts yet; its line reads `held` and names the key, and the follow-up its run's exit starts appends a line of its own with the same delivery id.
-- **A run that never exits** — its key stays held until the process restarts, so that object's wakes for that profile stop; the held line with no follow-up after it is the trace.
+- **A run that never exits** — its key is freed an hour after the last delivery reached it, and stays claimed while a delivery is held for it, so that object's wakes for that profile stop only while one waits; the held line with no follow-up after it is the trace.
 - **A pull request at either cap, or a branch at its cap** — `202`, and nobody is woken; the line shows which cap was reached.
 - **A run that cannot start** — recorded on the line, answered `202`, not retried.
 - **A run that ends non-zero** — a line of its own, appended when the child exits; the delivery's answer went out before it started, so nothing changes and nothing is retried.

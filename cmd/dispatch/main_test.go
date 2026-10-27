@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aivara-se/dispatch/internal/audit"
+	"github.com/aivara-se/dispatch/internal/config"
 	"github.com/aivara-se/dispatch/internal/receiver"
 	"github.com/aivara-se/dispatch/internal/run"
 )
@@ -40,9 +41,10 @@ type noRecord struct{}
 
 func (noRecord) Append(audit.Record) error { return nil }
 
-// TestARunCannotReadTheSecret pins #151: the service keeps the secret in memory,
-// and the child it starts finds neither its name nor its value in the
-// environment it inherits, so no value the child read signs a delivery.
+// TestARunCannotReadTheSecret pins #151: the service keeps the secret in memory
+// and its own environment intact, and starts the child with only the variables
+// child_env names, so neither the secret's name nor its value is in what the
+// child inherited, and no value the child read signs a delivery.
 func TestARunCannotReadTheSecret(t *testing.T) {
 	const secret = "probe-webhook-secret-9f3c1d7a"
 	dir := t.TempDir()
@@ -57,22 +59,26 @@ func TestARunCannotReadTheSecret(t *testing.T) {
   "path": "/github",
   "secret_name": "DISPATCH_WEBHOOK_SECRET",
   "hermes": %q,
+  "child_env": ["DISPATCH_TEST_ENVIRON"],
   "agents": [{ "login": "thani-sh-meme", "profile": "meme" }]
 }`, os.Args[0])
 	if err := os.WriteFile(configPath, []byte(document), 0o600); err != nil {
 		t.Fatalf("write configuration: %v", err)
 	}
 
-	cfg, err := loadConfig(configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
+		t.Fatalf("config.Load: %v", err)
 	}
 	if string(cfg.Secret) != secret {
 		t.Fatal("the service did not keep the secret in memory")
 	}
+	if got := os.Getenv("DISPATCH_WEBHOOK_SECRET"); got != secret {
+		t.Fatal("the service took the secret out of its own environment")
+	}
 
 	exits := make(chan int, 1)
-	err = run.New(os.Args[0]).Start("meme", "Dispatch: a reason", "aivara-se/dispatch#151", func(exit int) { exits <- exit })
+	err = run.New(os.Args[0], cfg.ChildEnvironment).Start("meme", "Dispatch: a reason", "aivara-se/dispatch#151", func(exit int) { exits <- exit })
 	if err != nil {
 		t.Fatalf("start the child: %v", err)
 	}
@@ -93,25 +99,20 @@ func TestARunCannotReadTheSecret(t *testing.T) {
 	if strings.Contains(child, secret) {
 		t.Fatalf("the child's environment carries the secret's value:\n%s", child)
 	}
+	if want := "DISPATCH_TEST_ENVIRON=" + dump; child != want {
+		t.Fatalf("the child's environment is %q, want exactly %q", child, want)
+	}
 
 	rc := receiver.New(cfg.Secret, cfg.AgentProfiles(), noRun{}, noRecord{})
 	body := `{"action":"assigned","repository":{"full_name":"aivara-se/dispatch"},"issue":{"number":151},"assignee":{"login":"thani-sh-meme"},"sender":{"login":"thani-sh"}}`
 	if got := signedPost(rc, "the-service", body, secret); got != http.StatusAccepted {
 		t.Fatalf("a delivery signed with the service's own copy answered %d, want 202", got)
 	}
-	read := 0
 	for i, line := range strings.Split(child, "\n") {
-		_, value, ok := strings.Cut(line, "=")
-		if !ok || value == "" {
-			continue
-		}
-		read++
+		_, value, _ := strings.Cut(line, "=")
 		if got := signedPost(rc, fmt.Sprintf("the-child-%d", i), body, value); got != http.StatusUnauthorized {
 			t.Fatalf("a delivery signed with %q, a value the child read, answered %d, want 401", line, got)
 		}
-	}
-	if read == 0 {
-		t.Fatal("the child's environment was empty, so nothing was checked")
 	}
 }
 

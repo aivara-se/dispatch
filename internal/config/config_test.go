@@ -12,6 +12,7 @@ const valid = `{
 	"path": "/github",
 	"secret_name": "DISPATCH_TEST_SECRET",
 	"hermes": "/usr/local/bin/hermes",
+	"child_env": ["HOME", "PATH"],
 	"agents": [
 		{"login": "thani-sh-meme", "profile": "meme"},
 		{"login": "thani-sh-mama", "profile": "mama"}
@@ -42,6 +43,9 @@ func TestLoad(t *testing.T) {
 	}
 	if string(c.Secret) != "fixture-secret-not-a-credential" {
 		t.Fatalf("secret = %q", c.Secret)
+	}
+	if got := c.ChildEnvironment; len(got) != 2 || got[0] != "HOME="+os.Getenv("HOME") || got[1] != "PATH="+os.Getenv("PATH") {
+		t.Fatalf("child environment = %q", got)
 	}
 	if got := c.AgentProfiles()["thani-sh-meme"]; got != "meme" {
 		t.Fatalf("profile for thani-sh-meme = %q", got)
@@ -81,7 +85,7 @@ func TestLoadRefusals(t *testing.T) {
 		},
 		{
 			name:    "empty agents",
-			content: `{"listen":"127.0.0.1:8645","path":"/github","secret_name":"DISPATCH_TEST_SECRET","hermes":"/usr/local/bin/hermes","agents":[]}`,
+			content: `{"listen":"127.0.0.1:8645","path":"/github","secret_name":"DISPATCH_TEST_SECRET","hermes":"/usr/local/bin/hermes","child_env":["HOME"],"agents":[]}`,
 			env:     true,
 			want:    "agents is empty",
 		},
@@ -90,6 +94,24 @@ func TestLoadRefusals(t *testing.T) {
 			content: valid + `{}`,
 			env:     true,
 			want:    "trailing data",
+		},
+		{
+			name:    "missing child_env",
+			content: strings.Replace(valid, "\"child_env\": [\"HOME\", \"PATH\"],\n", "", 1),
+			env:     true,
+			want:    "child_env is empty",
+		},
+		{
+			name:    "child_env names the secret",
+			content: strings.Replace(valid, `"child_env": ["HOME", "PATH"]`, `"child_env": ["HOME", "DISPATCH_TEST_SECRET"]`, 1),
+			env:     true,
+			want:    "the name the secret is read from",
+		},
+		{
+			name:    "child_env names a variable that is not set",
+			content: strings.Replace(valid, `"child_env": ["HOME", "PATH"]`, `"child_env": ["HOME", "DISPATCH_TEST_ABSENT"]`, 1),
+			env:     true,
+			want:    `variable "DISPATCH_TEST_ABSENT" named by child_env is not set in the environment`,
 		},
 	}
 

@@ -7,14 +7,18 @@ import (
 	"os/exec"
 )
 
-// Runner starts runs with the hermes binary at its configured absolute path.
+// Runner starts runs with the hermes binary at its configured absolute path and
+// the environment it gives a child.
 type Runner struct {
 	path string
+	env  []string
 }
 
-// New returns a Runner for the hermes binary at path.
-func New(path string) *Runner {
-	return &Runner{path: path}
+// New returns a Runner for the hermes binary at path, starting each child with
+// exactly env, "NAME=value" pairs. That list is the whole of what a run
+// inherits: the service's own environment is never passed on.
+func New(path string, env []string) *Runner {
+	return &Runner{path: path, env: env}
 }
 
 // Start launches `hermes --profile <profile> chat -q "<reason>" --source
@@ -24,6 +28,7 @@ func New(path string) *Runner {
 // start.
 func (r *Runner) Start(profile, reason, title string, onExit func(exit int)) error {
 	cmd := exec.Command(r.path, "--profile", profile, "chat", "-q", reason, "--source", "tool", "-c", title, "--create-if-missing")
+	cmd.Env = r.env
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start hermes: %w", err)
 	}

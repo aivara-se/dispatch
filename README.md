@@ -12,6 +12,7 @@ The service reads one JSON file, the one `--config` names; write it beside the b
   "path": "/github",
   "secret_name": "DISPATCH_WEBHOOK_SECRET",
   "hermes": "/root/.local/bin/hermes",
+  "child_env": ["HOME", "PATH"],
   "agents": [
     { "login": "thani-sh-mama", "profile": "mama" },
     { "login": "thani-sh-meme", "profile": "meme" },
@@ -21,7 +22,7 @@ The service reads one JSON file, the one `--config` names; write it beside the b
 }
 ```
 
-Every field is required and an unknown one is refused. `secret_name` names the environment variable the webhook secret is read from and the value is never in the file.
+Every field is required and an unknown one is refused. `secret_name` names the environment variable the webhook secret is read from and the value is never in the file. `child_env` names the environment variables a run's child keeps: the child is started with those and nothing else, so the service's own environment does not reach it, and the name the secret is read from cannot be listed ([`023`](docs/adrs/023-the-runs-child-environment.md)).
 
 ## Run it locally
 
@@ -55,7 +56,7 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-`~/.config/dispatch.env`, mode `600`, holds the webhook secret the configuration names and no other value:
+`~/.config/dispatch.env`, mode `600`, holds the webhook secret the configuration names and no other value. The unit's whole environment reaches the service and none of it reaches a run unless `child_env` names it, so the secret stays out of every child:
 
 ```sh
 DISPATCH_WEBHOOK_SECRET=<the secret GitHub is given>

@@ -2508,7 +2508,7 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 
 			recorder := &memAudit{}
 			agents := map[string]string{"thani-sh-meme": "meme", "thani-sh-mama": "mama"}
-			rc := New([]byte(testSecret), agents, run.New(os.Args[0]), recorder)
+			rc := New([]byte(testSecret), agents, run.New(os.Args[0], []string{"DISPATCH_TEST_ARGV=" + capture}), recorder)
 
 			if w := post(rc, tc.event, "d1", tc.body, sign(tc.body)); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)

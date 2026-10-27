@@ -32,7 +32,7 @@ func main() {
 }
 
 func serve(configPath string) error {
-	cfg, err := loadConfig(configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
@@ -43,7 +43,7 @@ func serve(configPath string) error {
 	}
 	defer record.Close()
 	mux := http.NewServeMux()
-	mux.Handle(cfg.Path, receiver.New(cfg.Secret, cfg.AgentProfiles(), run.New(cfg.Hermes), record))
+	mux.Handle(cfg.Path, receiver.New(cfg.Secret, cfg.AgentProfiles(), run.New(cfg.Hermes, cfg.ChildEnvironment), record))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -80,16 +80,4 @@ func serve(configPath string) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)
-}
-
-// loadConfig reads the configuration and takes the secret's name out of this
-// process's environment, which every child a run starts would inherit. The
-// value stays in memory, in the configuration's own copy.
-func loadConfig(configPath string) (*config.Config, error) {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return nil, err
-	}
-	_ = os.Unsetenv(cfg.SecretName)
-	return cfg, nil
 }

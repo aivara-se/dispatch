@@ -19,15 +19,17 @@ type Agent struct {
 }
 
 // Config is the committed document, with the secret it names resolved from the
-// environment at load time.
+// environment at load time, and the environment a run's child keeps.
 type Config struct {
-	Listen     string  `json:"listen"`
-	Path       string  `json:"path"`
-	SecretName string  `json:"secret_name"`
-	Hermes     string  `json:"hermes"`
-	Agents     []Agent `json:"agents"`
+	Listen     string   `json:"listen"`
+	Path       string   `json:"path"`
+	SecretName string   `json:"secret_name"`
+	Hermes     string   `json:"hermes"`
+	ChildEnv   []string `json:"child_env"`
+	Agents     []Agent  `json:"agents"`
 
-	Secret []byte `json:"-"`
+	Secret           []byte   `json:"-"`
+	ChildEnvironment []string `json:"-"`
 }
 
 // Load reads the document at path, refuses anything it does not recognise, and
@@ -60,6 +62,14 @@ func Load(path string) (*Config, error) {
 	}
 	c.Secret = []byte(secret)
 
+	for _, name := range c.ChildEnv {
+		value, ok := os.LookupEnv(name)
+		if !ok {
+			return nil, fmt.Errorf("variable %q named by child_env is not set in the environment", name)
+		}
+		c.ChildEnvironment = append(c.ChildEnvironment, name+"="+value)
+	}
+
 	return &c, nil
 }
 
@@ -87,6 +97,14 @@ func (c *Config) validate() error {
 	}
 	if len(c.Agents) == 0 {
 		return errors.New("agents is empty")
+	}
+	if len(c.ChildEnv) == 0 {
+		return errors.New("child_env is empty")
+	}
+	for i, name := range c.ChildEnv {
+		if name == c.SecretName {
+			return fmt.Errorf("child_env[%d] lists %q, the name the secret is read from", i, c.SecretName)
+		}
 	}
 
 	seen := make(map[string]bool, len(c.Agents))

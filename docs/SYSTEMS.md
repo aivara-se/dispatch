@@ -49,7 +49,7 @@ The argv is a contract with another program — `--profile`/`-p`, `chat -q`, `--
 
 ## The reason
 
-A wake's only input is the reason, and the reason is identifiers and the service's own words — never a title, a body or a comment ([`002`](adrs/002-github-webhook-ingestion.md)). The one branch is the red-main reason's ref, which stands where a pull request's number would ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)). The ten fixed sentences are:
+A wake's instruction is the reason, and the reason is identifiers and the service's own words — never a title, a body or a comment ([`002`](adrs/002-github-webhook-ingestion.md)). What a run also carries is the session its object's key names, holding what earlier rounds on that object read and wrote ([`022`](adrs/022-a-wake-resumes-its-objects-session.md)). The one branch is the red-main reason's ref, which stands where a pull request's number would ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)). The ten fixed sentences are:
 
 ```
 Dispatch: review requested on aivara-se/dispatch#105

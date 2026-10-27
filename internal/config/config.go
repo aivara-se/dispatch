@@ -33,7 +33,8 @@ type Config struct {
 }
 
 // Load reads the document at path, refuses anything it does not recognise, and
-// resolves the secret it names. The secret's value is never part of an error.
+// resolves the secret it names and the environment a child keeps. No value is
+// ever part of an error.
 func Load(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {

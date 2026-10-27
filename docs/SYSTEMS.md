@@ -37,7 +37,7 @@ The answers are the service's own: `401` a missing or non-verifying signature, `
 
 ## Starting a run
 
-The requirement is that no wake is lost. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>" --source dispatch`, launched by the service ([`003`](adrs/003-starting-a-run.md), [`019`](adrs/019-every-run-is-tagged-dispatch.md)).
+The requirement is that no wake is lost. The mechanism is a child process: `hermes --profile <profile> chat -q "<reason>" --source tool`, launched by the service ([`003`](adrs/003-starting-a-run.md), [`019`](adrs/019-every-run-is-tagged-dispatch.md)).
 
 - **One run in flight per object and profile.** The key is `<repository>#<number>`, or `<repository>@<branch>` for a default-branch run, paired with the local profile. A delivery that lands on a live key starts nothing: it is held, and one follow-up starts when that run exits, carrying the most recent held delivery's reason ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)). At most one delivery is held per key and a later one replaces it, so a burst becomes one run. Nothing is serialised more widely: another pull request, or another agent on the same one, still starts immediately.
 - **No tracking.** The child is waited on from its own goroutine, its exit status is read once, and nothing about the run is stored: no run table, no lifetime bound, nothing reconciled at boot ([`015`](adrs/015-the-audit-records-a-runs-exit.md)). The exit also releases the key the run held, which is what starts the follow-up. A run that exits non-zero appends a line of its own; one that exits zero appends nothing.
@@ -95,7 +95,9 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 ## Planned, not built
 
-Every list above describes v1.15; one thing is decided and unbuilt.
+Every list above describes v1.15; two things are decided and unbuilt.
+
+**A wake resumes its object's session** ([`022`](adrs/022-a-wake-resumes-its-objects-session.md)). The run gains `-c "<owner>/<repo>#<number>"` — `<owner>/<repo>@<branch>` for a default-branch run — and `--create-if-missing`, so the first wake creates that session and every later wake on the same object appends to it. The title is derived from the delivery: the service stores no id, adds no state and reconciles nothing at boot, and a session that was pruned or renamed is created again. The gate above ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)) is what keeps two runs from appending to one transcript. The *Starting a run* section above still describes v1.15, which starts every wake in a new session.
 
 **Observability, not a version** ([`020`](adrs/020-telemetry-leaves-through-a-collector.md)). The service serves `GET /metrics` in Prometheus text on `127.0.0.1:9464` — `dispatch_deliveries_total{event,decision}` and a `dispatch_delivery_duration_seconds` histogram — from `internal/metrics`, standard library only. A stock OpenTelemetry Collector on the host scrapes it and exports OTLP to whichever provider the operator configures; nothing in this repository builds, configures or restarts the collector. It adds no dependency, no configuration field, no audit line and no span.
 

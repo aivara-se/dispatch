@@ -1,11 +1,14 @@
 name: publish
 
-# Optional: VERSION on main is the release. A push that changes it builds the
-# binaries, tags the commit and publishes the release; a push that does not is
-# a run that reads the file and stops.
+# VERSION on main is the release. A push that changes it builds the binaries,
+# tags the commit and publishes the release; a push that does not change it
+# reads the file and stops.
 #
-# The workflow itself lives in aivara-se/.github, whose docs/RELEASES.md is the
-# standard.
+# This workflow is this repository's own: the release process is the same in
+# every repository (aivara-se/.github contains docs/RELEASES.md, the standard),
+# and the packaging is not, so each repository carries the workflow for its
+# artifact. Nothing is dispatched by hand, and the run creates no commit and no
+# pull request.
 
 on:
   push:
@@ -14,10 +17,133 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: publish-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
-  publish:
-    uses: aivara-se/.github/.github/workflows/go-publish.yml@main
-    with:
-      package: ./cmd/dispatch
-      binary: dispatch
-    secrets: inherit
+  meta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+      build: ${{ steps.read.outputs.build }}
+      ref: ${{ steps.read.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Read the version, the tag and the release
+        id: read
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          version=$(tr -d '[:space:]' < VERSION)
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "VERSION carries no version: '$version'" >&2
+            exit 1
+          fi
+          tag="v$version"
+          git fetch --tags --force --quiet
+          ref="$GITHUB_SHA"
+          tagged=false
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tagged=true
+            ref="$tag"
+          fi
+          released=false
+          if gh release view "$tag" >/dev/null 2>&1; then
+            released=true
+          fi
+          build=true
+          if [ "$tagged" = true ] && [ "$released" = true ]; then
+            build=false
+            echo "$tag is already tagged and released; nothing to publish"
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "build=$build"
+            echo "ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: meta
+    if: needs.meta.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          goos=${TARGET%/*}
+          goarch=${TARGET#*/}
+          ext=""
+          if [ "$goos" = windows ]; then ext=".exe"; fi
+          asset="dispatch-$VERSION-$goos-$goarch$ext"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+            go build -trimpath -buildvcs=false -o "dist/$asset" ./cmd/dispatch
+          echo "NAME=$goos-$goarch" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NAME }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [meta, build]
+    if: needs.meta.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Tag the commit and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "tag $TAG already exists"
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "$TAG"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" --verify-tag \
+              --title "$TAG" --generate-notes artifacts/*
+          fi

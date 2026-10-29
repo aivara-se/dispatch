@@ -49,7 +49,7 @@ These three are the gate, and CI runs them on every pull request and on `main`. 
 
 - `cmd/dispatch/`: the wire-up — the one flag, the server and its timeouts, and the clean shutdown
 - `internal/config/`: loads and validates the configuration file, and resolves the secret it names
-- `internal/receiver/`: verifies a delivery, decides, and answers; the delivery-id cache lives here
+- `internal/receiver/`: verifies a delivery, decides, and answers; the dedup cache lives here
 - `internal/run/`: starts `hermes --profile <profile> chat -q "<reason>"` and reaps it
 - `internal/audit/`: the JSON Lines record, appended and size-rotated
 - `docs/PRODUCT.md`: what the service is for, who it is for, and how it is judged

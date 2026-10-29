@@ -1,0 +1,23 @@
+name: publish
+
+# Optional: VERSION on main is the release. A push that changes it builds the
+# binaries, tags the commit and publishes the release; a push that does not is
+# a run that reads the file and stops.
+#
+# The workflow itself lives in aivara-se/.github, whose docs/RELEASES.md is the
+# standard.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    uses: aivara-se/.github/.github/workflows/go-publish.yml@main
+    with:
+      package: ./cmd/dispatch
+      binary: dispatch
+    secrets: inherit

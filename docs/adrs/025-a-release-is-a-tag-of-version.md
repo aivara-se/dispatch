@@ -15,5 +15,5 @@ The service has versions — the product history runs to v1.16 — but no file s
 
 - The current version has one home and the release page agrees with it; a version that is tagged but has no release is finished by the next push, not by a new commit.
 - The binary carries no version of its own: `VERSION` is read by the workflow, so a binary is identified by the release it came from. Embedding the number is a change to the command, to be decided when something needs it.
-- The build is the gate's own `go build`, cross-compiled, so a release adds no check the gate did not run; the second architecture is compiled, not tested.
+- The release compiles what the gate does not: the gate runs `gofmt`, `go vet` and `go test` on the runner's own architecture, while the build cross-compiles linux/amd64 and linux/arm64 with `CGO_ENABLED=0`, so a cgo-only or arm64-only break reds the release with the gate green, and the second architecture is compiled, not tested.
 - The host still builds from the tree and its unit file is unchanged. Running the released binary instead is a deployment decision this record does not make.

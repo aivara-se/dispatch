@@ -98,7 +98,7 @@ The service calls no GitHub API and holds no GitHub credential: the payload and 
 
 Every list above describes v1.16; one thing is decided and unbuilt.
 
-**Observability, not a version** ([`020`](adrs/020-telemetry-leaves-through-a-collector.md)). The service serves `GET /metrics` in Prometheus text on `127.0.0.1:9464` — `dispatch_deliveries_total{event,decision}` and a `dispatch_delivery_duration_seconds` histogram — from `internal/metrics`, standard library only. A stock OpenTelemetry Collector on the host scrapes it and exports OTLP to whichever provider the operator configures; nothing in this repository builds, configures or restarts the collector. It adds no dependency, no configuration field, no audit line and no span.
+**Observability, not a version** ([`020`](adrs/020-telemetry-leaves-through-a-collector.md), [`026`](adrs/026-the-metrics-count-a-delivery-once.md)). The service serves `GET /metrics` in Prometheus text on `127.0.0.1:9464` — `dispatch_deliveries_total{event,decision}`, a `dispatch_delivery_duration_seconds` histogram and `dispatch_followups_total{decision}` — from `internal/metrics`, standard library only. A collector on the host scrapes it and writes it to whichever backend the operator configures; the host's is Grafana Alloy, and nothing in this repository builds, configures or restarts it. It adds no dependency, no configuration field, no audit line and no span.
 
 ## Checks
 

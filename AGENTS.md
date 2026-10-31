@@ -2,11 +2,16 @@
 
 Dispatch is a Go service that receives GitHub's webhook deliveries for the `aivara-se` organisation and wakes the agent the event concerns — the reviewer a pull request asks for, the author whose review requests changes, or the agent an issue is assigned to — with the reason. It is built for the operator of a small fleet of agents.
 
-## Current Project Focus
+This file is the `aivara-se` agent convention: the rules that hold in every repository. Adopt it, do not fork it. It never describes the state of the work — that lives in the documents below.
 
-v1.2 is built. v1.3 — an issue's assignment wakes its agent — is designed and in review ([#119](https://github.com/aivara-se/dispatch/pull/119)); the receiver branch and its tests follow in one pull request, and the `issues` subscription on the organisation webhook is the operator's. v1.3 adds no state, no count and no GitHub call, and still touches no board.
+## Where a fact lives
 
-This section is steering, not policy. It is the one place where what matters right now outranks the standing rules below, it changes often, and it is replaced rather than appended to. Keep it short enough to read in full, and current enough to be worth reading.
+- `docs/PRODUCT.md` — what the service is, who it serves, what it must not do, what the work is on now, and what would make it done.
+- `docs/SYSTEMS.md` — how it is served, built and checked.
+- `docs/adrs/` — a decision per file, written before the code it decides.
+- `README.md` — how to run it locally.
+
+One fact, one home: link to a document, never restate it. A sentence here that starts describing the work instead of how work is done belongs in `PRODUCT.md`.
 
 ## House rules
 
@@ -36,26 +41,16 @@ Run the whole sequence, not just its fast part, and read every result — the ex
 
 These three are the gate, and CI runs them on every pull request and on `main`. What no machine can see, a reviewer covers: that every relative link in a document resolves to a file in the tree, that no unfilled slot survives, and that each ADR's Consequences says what its choice costs and not only what it buys.
 
+## Skills
+
+The organisation's skills live in `aivara-se/.agents/skills` and every agent reads them from there; a repository carries no copy. Each declares a `when-to-use`: open the one that covers the work before starting it.
+
 ## Version Control
 
-- **Branches**: lowercase, hyphens only, one per task, named for the change — `fix-log-timezone`, `chore/adopt-agents-config`. No uppercase, no underscores, no personal prefixes.
+- **Branches**: lowercase, hyphens, one per task: `docs/`, `feat/`, `fix/` or `chore/` and a short name — `docs/adopt-agents-config`, `fix-log-timezone`. No uppercase, no underscores, no personal prefixes.
 - **Commits**: Conventional Commits, lowercase, single line, no scopes — `type: short description`.
 - **Never** commit to `main` directly. **Never** force-push a branch another agent or person has seen.
 - Keep history linear: no merge commits, no empty commits, no work-in-progress commits left behind.
 - Commit under your own identity — your name, your address at this organisation. Never a generic agent, never another agent's identity.
-- Remote work is always a branch plus a pull request. The pull request body says what changed, what was verified and how, and what was left out; request review from the operator (`thani-sh`) and one peer agent. Leave the working tree clean: no scratch files, no editor backups, no `.env` you created.
-
-## Repository Structure
-
-- `cmd/dispatch/`: the wire-up — the one flag, the server and its timeouts, and the clean shutdown
-- `internal/config/`: loads and validates the configuration file, and resolves the secret it names
-- `internal/receiver/`: verifies a delivery, decides, and answers; the dedup cache lives here
-- `internal/run/`: starts `hermes --profile <profile> chat -q "<reason>"` and reaps it
-- `internal/audit/`: the JSON Lines record, appended and size-rotated
-- `docs/PRODUCT.md`: what the service is for, who it is for, and how it is judged
-- `docs/SYSTEMS.md`: the architecture — where it runs, how a delivery becomes a run, and what is checked
-- `docs/adrs/`: one decision per file; merged into `main` means Accepted
-- `AGENTS.md`: the entry file an agent reads first
-- `README.md`: how it builds, runs and deploys, and where the documents are
-
-New markdown goes in the directory that already owns its subject, and a fact has exactly one home. Never add a second copy of something a document already says; link to it. If a path in the map above stops being true, fix the map in the same pull request. A map that lies is worse than no map.
+- Remote work is always a branch plus a pull request. The pull request body says what changed, what was verified and how, and what was left out. Leave the working tree clean: no scratch files, no editor backups, no `.env` you created.
+- Request review from the operator (`thani-sh`) alone on a documents-only change, and from one peer agent as well on an implementation one.

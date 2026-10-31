@@ -3,10 +3,10 @@ package receiver
 // The safety net for splitting this package into a receiver, a dispatcher and a
 // scheduler. Three things the rest of the suite leaves open:
 //
-//  1. the numbers PRODUCT.md promises are not pinned — every other test loops
-//     over the constant, so a changed constant moves the test with it;
-//  2. no test enumerates the dispatch types, so a flow that stops being
-//     reachable is caught only by the test that names it;
+//  1. the caps are not pinned in literals — every other test loops over the
+//     constant, so a changed constant moves the test with it;
+//  2. the ten dispatch types are enumerated in one table and counted in
+//     nothing, so a deleted row leaves a shorter table that still passes;
 //  3. every test is one or two deliveries, so nothing fixes the order of the
 //     audit lines across a burst.
 
@@ -22,7 +22,7 @@ import (
 
 // TestTheDocumentedCapsAreTheShippedOnes pins what the documents promise, in
 // literals. PRODUCT.md: ten rounds, five wakes per pull request, five per
-// branch, a 1 MiB body. ADR 024: an hour of dedup.
+// branch. SYSTEMS.md: a 1 MiB body. ADR 024: an hour of dedup.
 func TestTheDocumentedCapsAreTheShippedOnes(t *testing.T) {
 	if MaxRounds != 10 {
 		t.Errorf("MaxRounds = %d, want 10: the review cap PRODUCT.md states", MaxRounds)
@@ -31,7 +31,7 @@ func TestTheDocumentedCapsAreTheShippedOnes(t *testing.T) {
 		t.Errorf("MaxFailures = %d, want 5: the failed-check cap PRODUCT.md states", MaxFailures)
 	}
 	if MaxBody != 1<<20 {
-		t.Errorf("MaxBody = %d, want 1 MiB: the bound PRODUCT.md states", MaxBody)
+		t.Errorf("MaxBody = %d, want 1 MiB: the bound SYSTEMS.md states", MaxBody)
 	}
 	if DedupTTL != time.Hour {
 		t.Errorf("DedupTTL = %v, want 1 h: the window ADR 024 states", DedupTTL)
@@ -81,10 +81,11 @@ func TestTheDocumentedCapsAreTheShippedOnes(t *testing.T) {
 
 // TestEveryDispatchTypeIsReachableFromASignedDelivery enumerates the ten
 // sentences SYSTEMS.md ("The reason") lists, one row each, and checks that a
-// signed delivery still starts a run with that reason and no other. After the
-// split this is the test that a registry row cannot silently go missing: a
-// dispatcher with nine registered flows compiles, passes the per-flow tests and
-// fails here.
+// signed delivery still starts a run with that reason and no other. What it adds
+// to TestEndToEndSignedPostStartsRun, which posts the same ten and pins the
+// argv, is the count — a deleted row fails here instead of leaving a shorter
+// table — and the two-wake ready_for_review delivery. It runs on the stub
+// runner, so the count is checked on every run without a process.
 func TestEveryDispatchTypeIsReachableFromASignedDelivery(t *testing.T) {
 	cases := []struct {
 		name     string

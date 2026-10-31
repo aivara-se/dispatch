@@ -100,6 +100,21 @@ Every list above describes v1.16; one thing is decided and unbuilt.
 
 **Observability, not a version** ([`020`](adrs/020-telemetry-leaves-through-a-collector.md), [`026`](adrs/026-the-metrics-count-a-delivery-once.md)). The service serves `GET /metrics` in Prometheus text on `127.0.0.1:9464` — `dispatch_deliveries_total{event,decision}`, a `dispatch_delivery_duration_seconds` histogram and `dispatch_followups_total{decision}` — from `internal/metrics`, standard library only. A collector on the host scrapes it and writes it to whichever backend the operator configures; the host's is Grafana Alloy, and nothing in this repository builds, configures or restarts it. It adds no dependency, no configuration field, no audit line and no span.
 
+## Repository layout
+
+- `cmd/dispatch/` — the wire-up: the one flag, the server and its timeouts, and the clean shutdown
+- `internal/config/` — loads and validates the configuration file, and resolves the secret it names
+- `internal/receiver/` — verifies a delivery, decides, and answers; the dedup cache lives here
+- `internal/run/` — starts `hermes --profile <profile> chat -q "<reason>"` and reaps it
+- `internal/audit/` — the JSON Lines record, appended and size-rotated
+- `docs/PRODUCT.md` — what the service is for, who it is for, and how it is judged
+- `docs/SYSTEMS.md` — this file
+- `docs/adrs/` — one decision per file; merged into `main` means Accepted
+- `AGENTS.md` — the entry file an agent reads first
+- `README.md` — how it builds, runs and deploys, and where the documents are
+
+New markdown goes in the directory that already owns its subject, and a fact has exactly one home. Never add a second copy of something a document already says; link to it. If a path in the map above stops being true, fix the map in the same pull request. A map that lies is worse than no map.
+
 ## Checks
 
 ```sh

@@ -9,7 +9,7 @@ The operator's requirement is provider-neutral telemetry: instrument once, point
 Inside is expensive. Measured on 2026-10-21 with Go 1.27.2, adding the SDK and an OTLP/HTTP exporter to a program that already serves HTTP:
 
 | The program | Binary | Over plain HTTP |
-|---|---|---|
+| --- | --- | --- |
 | `net/http` alone | 8,617,812 | — |
 | OpenTelemetry API, no-op provider | 10,291,041 | +1.67 MB |
 | Trace SDK, no exporter | 11,213,799 | +2.60 MB |

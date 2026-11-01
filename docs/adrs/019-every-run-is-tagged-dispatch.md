@@ -4,7 +4,7 @@
 
 `003` fixes the argv as `hermes --profile <profile> chat -q "<reason>"`, and the run stores itself with the source tag `oneshot`. That is the tag every finite automation on the host shares, so the service's runs are distinguishable here only because they are the only one-shots on this machine.
 
-Hermes stores a per-session source tag and an explicit `--source` always wins, one-shot runs included; `hermes sessions list --source <tag>` filters on it, and the prune and archive filters take the same key (`hermes-agent`, *Sessions → Session Sources*, read 2026-10-21). A title is not available at spawn: `chat` has no title flag, a title is generated after the first exchange, and setting one by hand takes `sessions rename <id>` and an id the service does not read.
+Hermes stores a per-session source tag and an explicit `--source` always wins, one-shot runs included; `hermes sessions list --source <tag>` filters on it, and the prune and archive filters take the same key (`hermes-agent`, _Sessions → Session Sources_, read 2026-10-21). A title is not available at spawn: `chat` has no title flag, a title is generated after the first exchange, and setting one by hand takes `sessions rename <id>` and an id the service does not read.
 
 ## Decision
 

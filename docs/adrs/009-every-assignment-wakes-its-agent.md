@@ -2,7 +2,7 @@
 
 ## Context
 
-[008](008-issue-assignment.md) acts on `issues` with action `assigned`. [PRODUCT](../PRODUCT.md) (*Edge cases v1.3 leaves unhandled*) lists two assignment-shaped gestures it does not reach: an issue created with an assignee already on it, and a pull request assigned.
+[008](008-issue-assignment.md) acts on `issues` with action `assigned`. [PRODUCT](../PRODUCT.md) (_Edge cases v1.3 leaves unhandled_) lists two assignment-shaped gestures it does not reach: an issue created with an assignee already on it, and a pull request assigned.
 
 The first turns out not to need reaching. GitHub delivers `assigned` for the assignment that creation performs, after `opened`. A repository webhook subscribed to `issues` and `pull_request` was given an issue created with an assignee and a pull request created with an assignee; it recorded `issues` `opened` then `issues` `assigned`, and `pull_request` `opened` then `pull_request` `assigned` (observed 2026-10-20). The `opened` delivery is not the assignment, and acting on it would wake the agent for work the `assigned` delivery is about to announce anyway.
 

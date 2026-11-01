@@ -6,7 +6,7 @@ This document describes v1.16; the flows and their acceptance are [PRODUCT](PROD
 
 One long-running process on the operator's host, beside the Hermes home, as a systemd user unit that restarts on failure. It binds loopback and is reached through the host's reverse proxy, which terminates TLS; GitHub is its only public client, and a collector on the same host reads its metrics over loopback ([`020`](adrs/020-telemetry-leaves-through-a-collector.md)). The binary is static and the deploy is a new binary plus a unit restart — there is no deploy pipeline ([`001`](adrs/001-go-and-the-standard-library.md)).
 
-The unit, the environment file and the proxy site are `README.md` (*Run it on the host*).
+The unit, the environment file and the proxy site are `README.md` (_Run it on the host_).
 
 ## A delivery becomes a run
 
@@ -27,6 +27,7 @@ The unit, the environment file and the proxy site are `README.md` (*Run it on th
    - a `pull_request_review` delivery whose action is `dismissed`, which wakes the pull request's author when the pull request is open, not a draft and carries no `merged_at` ([`017`](adrs/017-a-dismissed-review-wakes-the-author.md)).
 
    Every other event, action, review state or author association is accepted and ignored.
+
 5. The body's SHA-256 is checked against the in-memory cache. Bytes already acted on are accepted and start nothing, whatever delivery id they arrive under ([`024`](adrs/024-the-dedup-key-is-the-signed-body.md)).
 6. For the review flows, the round count decides whether the delivery may act: at ten it wakes nobody, and below ten a `changes_requested` review adds one ([`007`](adrs/007-the-review-cap.md)). A delivery with a mention is not refused by that count: it wakes the logins its text names and loses only the review's own target. A failed check keeps a count of five per pull request ([`010`](adrs/010-a-failing-check-wakes-the-pusher.md)), and one of five per repository and branch ([`014`](adrs/014-a-red-main-wakes-its-pusher.md)); each is checked before the wake and advanced only when a run starts. Every count is in memory. An assignment, an approval, a mention, a dismissal and a ready-for-review keep no count and consult none.
 7. The logins to wake are matched against the configured agents: the requested reviewer, the pull request's author, the delivery's assignee, the run's actor, the logins a comment or a review names, or the reviewers a pull request still requests. A team entry is never resolved, so it wakes nobody. A login the configuration does not carry wakes nobody, and the delivery's own actor is never woken, except the actor of a failed run, who is the one it is news to.

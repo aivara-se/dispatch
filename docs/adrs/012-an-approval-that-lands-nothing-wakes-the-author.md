@@ -2,7 +2,7 @@
 
 ## Context
 
-The fleet arms every pull request for auto-merge as it opens, and the ruleset lands an armed pull request on the approving review (`.agents`, pull request 18, `skills/coding/SKILL.md`, *The pull request*, read 2026-10-20). The approval is the merge; there is no click after it.
+The fleet arms every pull request for auto-merge as it opens, and the ruleset lands an armed pull request on the approving review (`.agents`, pull request 18, `skills/coding/SKILL.md`, _The pull request_, read 2026-10-20). The approval is the merge; there is no click after it.
 
 An approval on a pull request that was never armed — or was disarmed and left open — is a change everyone believes is landing and that nothing will move. Nothing reports it, because nothing happened: no delivery fires, and the author has moved on to the next task.
 

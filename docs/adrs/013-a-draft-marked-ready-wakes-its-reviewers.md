@@ -2,7 +2,7 @@
 
 ## Context
 
-The fleet opens probes, spikes and anything that must not merge as drafts, and never arms them (`.agents`, pull request 18, `skills/coding/SKILL.md`, *The pull request*, read 2026-10-20). A draft that is ready becomes a pull request that may land, and that transition is its own delivery — `pull_request` with action `ready_for_review` — which nothing acts on.
+The fleet opens probes, spikes and anything that must not merge as drafts, and never arms them (`.agents`, pull request 18, `skills/coding/SKILL.md`, _The pull request_, read 2026-10-20). A draft that is ready becomes a pull request that may land, and that transition is its own delivery — `pull_request` with action `ready_for_review` — which nothing acts on.
 
 The reviewers were requested when the draft opened, so the wake they got was for something they had been told not to merge. The wake they need is this one: the change is now a candidate.
 

@@ -17,7 +17,14 @@ jobs:
         with:
           go-version: "1.26"
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Format
+        run: bun x prettier@3.9.10 --check .
+
+      - name: Go format
         run: test -z "$(gofmt -l .)"
 
       - name: Vet and test

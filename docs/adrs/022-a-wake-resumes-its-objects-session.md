@@ -6,7 +6,7 @@ Every wake starts a new Hermes session: `003` fixes the run as `hermes --profile
 
 Hermes resumes a chat by name. `-c "<title>"` loads the session carrying it and follows a compression lineage to the newest variant; `--create-if-missing` turns a miss into a new session with that title, in the same process, so resume-or-create is one call and not a check followed by an act (`hermes chat --help`, `hermes_cli/_parser.py`, read 2026-10-27). A title set at creation holds against the auto-titler, which fills an untitled row and upgrades its own `derived` title but not a higher authority (`agent/title_generator.py`, read 2026-10-27). Titles are unique per profile and keep `/` and `#`.
 
-Three facts about the running version bound the choice. Creation goes through the gateway's `session.create`, which stamps the row's source `cli` whatever `--source` the run carries (`hermes_cli/gateway_session_store.py`, read 2026-10-27). `--source` is an enum rather than free text, which is why the run is tagged `tool` and `019`'s value could not stand. And a resumed session keeps its own model and restores its recorded working directory (`hermes-agent`, *Sessions → CLI Session Resume*, read 2026-10-27).
+Three facts about the running version bound the choice. Creation goes through the gateway's `session.create`, which stamps the row's source `cli` whatever `--source` the run carries (`hermes_cli/gateway_session_store.py`, read 2026-10-27). `--source` is an enum rather than free text, which is why the run is tagged `tool` and `019`'s value could not stand. And a resumed session keeps its own model and restores its recorded working directory (`hermes-agent`, _Sessions → CLI Session Resume_, read 2026-10-27).
 
 ## Decision
 

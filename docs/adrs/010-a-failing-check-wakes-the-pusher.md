@@ -2,11 +2,11 @@
 
 ## Context
 
-A pull request with red checks is the commonest silent stall in the fleet: the author pushed, the run failed, and nothing wakes anyone until a reviewer happens to look. v1.3 leaves it out ([PRODUCT](../PRODUCT.md), *Edge cases v1.3 leaves unhandled*).
+A pull request with red checks is the commonest silent stall in the fleet: the author pushed, the run failed, and nothing wakes anyone until a reviewer happens to look. v1.3 leaves it out ([PRODUCT](../PRODUCT.md), _Edge cases v1.3 leaves unhandled_).
 
 The target everyone names first is the pull request's author, and the payload does not carry it. `workflow_run.pull_requests[]` names each pull request by number and by head and base refs only, with no author (`octokit/webhooks`, `payload-schemas/api.github.com/common/workflow-run.schema.json`, read 2026-10-20). Reaching the author would take a GitHub API read and a credential, which [002](002-github-webhook-ingestion.md) rules out and which this service has never held.
 
-The payload does carry the run's `actor`: the account that triggered it, which for a pushed commit is the account that pushed. In this organisation the author is the only one who pushes to a pull request's own branch — a reviewer never pushes to a peer's branch ([PRODUCT](../PRODUCT.md), *The flow: review and update*) — so the pusher is the author in everything but name.
+The payload does carry the run's `actor`: the account that triggered it, which for a pushed commit is the account that pushed. In this organisation the author is the only one who pushes to a pull request's own branch — a reviewer never pushes to a peer's branch ([PRODUCT](../PRODUCT.md), _The flow: review and update_) — so the pusher is the author in everything but name.
 
 ## Decision
 

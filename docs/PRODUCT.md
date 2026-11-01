@@ -4,7 +4,7 @@ GitHub posts to `dispatch` when something happens in the `aivara-se` organisatio
 
 v1.16 carries six flows: the review and update loop on a pull request, an assignment on an issue or on a pull request, a failing check on a pull request or on the default branch, a mention in a comment, in a review's body or in a review comment, a draft that becomes ready for review, and a review that is dismissed. One agent runs one thing at a time on one pull request or one branch ([`021`](adrs/021-one-run-per-pull-request-per-agent.md)), and a wake resumes the session left for that object, so a later round keeps the reasoning of the earlier ones ([`022`](adrs/022-a-wake-resumes-its-objects-session.md)).
 
-A wake is a **reason, not an instruction**: the service says *why now*, and the agent re-reads the pull request or the issue and decides what to do. A wake may therefore be early, late, duplicated or out of order and the outcome is the same.
+A wake is a **reason, not an instruction**: the service says _why now_, and the agent re-reads the pull request or the issue and decides what to do. A wake may therefore be early, late, duplicated or out of order and the outcome is the same.
 
 ## Configuration
 

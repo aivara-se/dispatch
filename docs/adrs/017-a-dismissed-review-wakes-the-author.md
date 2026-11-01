@@ -18,7 +18,7 @@ The payload answers it without an API call: `pull_request_review` with action `d
 
 ## What this overrides
 
-[002](002-github-webhook-ingestion.md)'s "One event acts" set is widened by one action, as every record since `006` has widened it. Nothing else falls: `012`'s conditions on an *approval* stand and are reused unchanged, `006`'s "an approval spends no round" holds for a dismissal, and the actor rule, the roster match and the no-API consequence all still hold.
+[002](002-github-webhook-ingestion.md)'s "One event acts" set is widened by one action, as every record since `006` has widened it. Nothing else falls: `012`'s conditions on an _approval_ stand and are reused unchanged, `006`'s "an approval spends no round" holds for a dismissal, and the actor rule, the roster match and the no-API consequence all still hold.
 
 ## Consequences
 

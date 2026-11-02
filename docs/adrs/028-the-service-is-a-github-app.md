@@ -11,7 +11,7 @@ An app changes those facts. Its permissions are declared, granted and enforced b
 **The service runs as a GitHub App installed on the organisation. It reads the events it acts on, writes one kind of thing, and calls no endpoint outside this record's list.**
 
 - **Read:** pull requests, issues, actions, and the metadata every app carries.
-- **Write:** issues, for one act — a comment on the thread where the service has gone quiet, because a wake could not start after the boot reconcile or because a cap is reached.
+- **Write:** issues and pull requests, for one act — a comment on the thread where the service has gone quiet, because a wake could not start after the boot reconcile or because a cap is reached. A pull request's conversation is an issue to GitHub's API, so the one call serves both surfaces.
 - **The comment is the service's own words and identifiers.** It names no login and carries no text a third party wrote, so it wakes nobody, and its own delivery returns to the receiver and is ignored.
 - **The webhook is the app's.** Subscriptions are the six events the flows already use. The body contract does not move: raw bytes, `X-Hub-Signature-256`, 1 MiB, verified before anything is parsed. That rule is the webhook's alone. A body an API call returns carries no signature; the JWT or the installation token, over TLS, authenticates it.
 - **Two credentials.** A JWT signed per call from the private key reaches the app-level endpoints and lives ten minutes. An installation token, minted from it and cached until shortly before its hour ends, reaches the installation's.
@@ -25,7 +25,7 @@ An app changes those facts. Its permissions are declared, granted and enforced b
 ## Consequences
 
 - **One sentence stops being true:** "never writes to GitHub: no label, no comment, no merge, no push". The new one is narrower and checkable: one comment, on the thread, when the service stops waking on it — and no label, no merge, no push, no review request, no dismissal.
-- **GitHub's grant is wider than the use.** `issues: write` also permits a label, a close, an assignment and an edit. The code refuses them; the grant does not. That is the cost of a comment.
+- **GitHub's grant is wider than the use.** `issues: write` also permits a label, a close, an assignment and an edit. `pull_requests: write` also permits a merge, a close, a review, a dismissal and a review request. The code refuses every one of them; the grant does not. That is the cost of a comment.
 - **The key now speaks.** It signs for the app, so a stolen key reads what the app can read and posts as it, across the installed repositories, until the key is regenerated. The write is visible on the thread. The shared webhook secret it replaces could start runs; this cannot.
 - **Two credentials to keep fresh**, and a clock that matters: a JWT past its ten minutes is a failed call, and so is a cached token near its hour.
 - **A comment that fails is logged and not retried.** The error goes to the process log, as a failed audit append does, and nothing enters the record: no line, no field, no decision value. The five kinds stay five.

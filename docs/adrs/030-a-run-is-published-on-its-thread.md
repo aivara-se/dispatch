@@ -8,7 +8,7 @@ The service starts a child process and forgets it ([`003`](003-starting-a-run.md
 
 ## Decision
 
-**One status comment per object, written by the app, edited as its runs change.**
+**One status comment per thread, written by the app, edited as its runs change.**
 
 - **A row per agent**, for each run this process has seen on the object: its avatar, its login as a link, the reason phrase of its last wake, the state, and the time.
 - **The states:** `started`, `held` behind a live run, `finished` with exit zero, `failed` with a non-zero exit, `not started` when the service could not launch it, and `recovered` when the boot reconcile started it.

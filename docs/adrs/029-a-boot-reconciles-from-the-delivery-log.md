@@ -11,7 +11,7 @@ The service answers `202` before it acts, and nothing retries a wake it could no
 **At boot, and only at boot, the service decides again every delivery in the log that its audit does not account for.**
 
 - **The window** starts where the last reconcile ended, or at GitHub's three-day edge when there is none, and ends now.
-- **Accounted for** is a line carrying that delivery id with the decision `started`, `held`, `ignored` or `duplicate`. A `start_failed` line is not accounted for, and a delivery with no line is not.
+- **Accounted for** is a line carrying that delivery id with the decision `started`, `ignored`, `duplicate` or `recovered`. A `held` line counts only when a later line carries the same id and the decision `started`, which is the follow-up [`021`](021-one-run-per-pull-request-per-agent.md) starts when the run ends. A `start_failed` line is not accounted for, and a delivery with no line is not.
 - **The payload comes from `GET /app/hook/deliveries/{id}`** and the decision runs in process. The redelivery endpoint is not used: it re-enters the receiver, and when the process did not crash the body is already in the dedup cache, so the replay would be dropped as a `duplicate`.
 - **The new line says `recovered`**, carries the id, and names the earlier outcome when one exists.
 - **The reconcile appends one line of its own**, carrying the window it covered and how many deliveries it recovered, so the next boot resumes from there.

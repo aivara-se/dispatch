@@ -14,11 +14,11 @@ An app changes those three facts and no others. Its permissions are declared, gr
 - **The webhook is the app's.** Subscriptions are the six events the flows already use, and the body contract does not move: raw bytes, `X-Hub-Signature-256`, 1 MiB, verified before anything is parsed.
 - **No installation token.** The list holds two app-level endpoints, `GET /app/hook/deliveries` and `GET /app/hook/deliveries/{id}`, and a JWT reaches them. The JWT is signed per call from the private key, lives ten minutes, and is never stored.
 - **The key is a file.** The configuration names its path. The service reads it at boot and it leaves the process only as a signature.
-- **The scope is the installation.** `installation` and `installation_repositories` deliveries name the repositories, and a delivery from a repository outside that set is refused, not acted on.
+- **The scope is the installation, and GitHub enforces it.** The app is installed on the organisation and on the repositories the organisation selects, and GitHub delivers to the app for those alone, so a delivery that arrives belongs to an installed repository by construction. The service keeps no repository list and re-checks nothing: the list is `GET /installation/repositories`, and it needs an installation token this record refuses.
 
 ## What this overrides
 
-`002`'s "The service calls no API", "holds no GitHub credential", and "the receiver does not re-check the repository". The rest of `002` stands, including the signature, the bound, the dedup key and the reason.
+`002`'s "The service calls no API" and "holds no GitHub credential". The rest of `002` stands as written, its "no allowlist of repositories" and "the receiver does not re-check the repository" included: no list is kept and nothing is checked, because the organisation's installation is what narrows the scope and GitHub's delivery is what enforces it.
 
 ## Consequences
 

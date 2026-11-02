@@ -11,7 +11,7 @@ An app changes those three facts and no others. Its permissions are declared, gr
 **The service runs as a GitHub App installed on the organisation. It holds read permissions only, and it calls no endpoint outside this record's list.**
 
 - **Permissions, all read:** pull requests, issues, actions, and the metadata every app carries. No write permission of any kind.
-- **The webhook is the app's.** Subscriptions are the six events the flows already use, and the body contract does not move: raw bytes, `X-Hub-Signature-256`, 1 MiB, verified before anything is parsed.
+- **The webhook is the app's.** Subscriptions are the six events the flows already use, and the body contract does not move: raw bytes, `X-Hub-Signature-256`, 1 MiB, verified before anything is parsed. That rule is the webhook's own: a body an API call returns carries no signature, and the JWT and TLS authenticate it.
 - **No installation token.** The list holds two app-level endpoints, `GET /app/hook/deliveries` and `GET /app/hook/deliveries/{id}`, and a JWT reaches them. The JWT is signed per call from the private key, lives ten minutes, and is never stored.
 - **The key is a file.** The configuration names its path. The service reads it at boot and it leaves the process only as a signature.
 - **The scope is the installation, and GitHub enforces it.** The app is installed on the organisation and on the repositories the organisation selects, and GitHub delivers to the app for those alone, so a delivery that arrives belongs to an installed repository by construction. The service keeps no repository list and re-checks nothing: the list is `GET /installation/repositories`, and it needs an installation token this record refuses.

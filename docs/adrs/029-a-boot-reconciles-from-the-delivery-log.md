@@ -31,7 +31,7 @@ The service answers `202` before it acts, and nothing retries a wake it could no
 ## Consequences
 
 - **A crash costs one list and one call per unaccounted delivery**, not a lost wake.
-- **Three days is the floor.** An outage longer than that is not recoverable, and the reconcile line says how many deliveries fell outside the window.
+- **Three days is the floor.** A delivery older than the window is not in the list, so the reconcile cannot see it. The line names the window it covered, and the gap is visible after the fact.
 - **The audit is now load-bearing.** A line lost to a full disk is a wake the next boot repeats. That is the reverse failure, and it is the cheaper one.
 - **A run that dies after it started is not recovered.** Its line says `started` and the reconcile trusts it. A wake is a reason the agent re-reads, so that gap stays as it is.
 - **A boot that cannot reach GitHub still serves.** It skips the reconcile, and the next one reaches back to the last window that closed.

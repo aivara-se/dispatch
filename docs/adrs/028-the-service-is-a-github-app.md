@@ -28,7 +28,7 @@ An app changes those facts. Its permissions are declared, granted and enforced b
 - **GitHub's grant is wider than the use.** `issues: write` also permits a label, a close, an assignment and an edit. The code refuses them; the grant does not. That is the cost of a comment.
 - **The key now speaks.** It signs for the app, so a stolen key reads what the app can read and posts as it, across the installed repositories, until the key is regenerated. The write is visible on the thread. The shared webhook secret it replaces could start runs; this cannot.
 - **Two credentials to keep fresh**, and a clock that matters: a JWT past its ten minutes is a failed call, and so is a cached token near its hour.
-- **A comment that fails is recorded and not retried.** The audit stays the record.
+- **A comment that fails is logged and not retried.** The error goes to the process log, as a failed audit append does, and nothing enters the record: no line, no field, no decision value. The five kinds stay five.
 - **Check runs stay out.** A check named `dispatch` can be made required and block every merge the day the service stops posting.
 - **Two acts belong to an owner of the organisation:** register the app and install it. The service can do neither.
 - **The standard library still signs it.** `crypto/rsa`, `crypto/x509` and `encoding/pem` are enough, and no dependency enters.

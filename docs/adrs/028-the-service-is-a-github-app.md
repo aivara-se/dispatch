@@ -11,11 +11,11 @@ An app changes those facts. Its permissions are declared, granted and enforced b
 **The service runs as a GitHub App installed on the organisation. It reads the events it acts on, writes one kind of thing, and calls no endpoint outside this record's list.**
 
 - **Read:** pull requests, issues, actions, and the metadata every app carries.
-- **Write:** issues and pull requests, for one act — a comment on the thread where the service has gone quiet, because a wake could not start after the boot reconcile or because a cap is reached. One call serves both surfaces, and GitHub needs both scopes for it.
-- **The comment is the service's own words and identifiers.** It names no login and carries no text a third party wrote, so it wakes nobody, and its own delivery returns to the receiver and is ignored.
+- **Write:** issues and pull requests, for comments on a thread: one status card per object, edited as its runs change, and one alert when the service goes quiet, because a wake could not start after the boot reconcile or because a cap is reached. One call serves both surfaces, and GitHub needs both scopes for it.
+- **A comment carries the service's own words and identifiers** — a login, a reason phrase, an exit status, a time — and no text a third party wrote. A login is written without `@`, so a comment wakes nobody and its own delivery returns to the receiver and is ignored.
 - **The webhook is the app's.** Subscriptions are the six events the flows already use. The body contract does not move: raw bytes, `X-Hub-Signature-256`, 1 MiB, verified before anything is parsed. That rule is the webhook's alone. A body an API call returns carries no signature; the JWT or the installation token, over TLS, authenticates it.
 - **Two credentials.** A JWT signed per call from the private key reaches the app-level endpoints and lives ten minutes. An installation token, minted from it and cached until shortly before its hour ends, reaches the installation's.
-- **The list:** `GET /app/hook/deliveries`, `GET /app/hook/deliveries/{id}`, `POST /app/installations/{id}/access_tokens`, `POST /repos/{owner}/{repo}/issues/{number}/comments`.
+- **The list:** `GET /app/hook/deliveries`, `GET /app/hook/deliveries/{id}`, `POST /app/installations/{id}/access_tokens`, `POST /repos/{owner}/{repo}/issues/{number}/comments`, `GET /repos/{owner}/{repo}/issues/{number}/comments`, `PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}`.
 - **The scope is the installation, and GitHub enforces it.** The app is installed on the organisation and on the repositories the organisation selects. GitHub delivers to the app for those alone, so a delivery that arrives belongs to an installed repository by construction. The service keeps no repository list.
 
 ## What this overrides
@@ -24,7 +24,7 @@ An app changes those facts. Its permissions are declared, granted and enforced b
 
 ## Consequences
 
-- **One sentence stops being true:** "never writes to GitHub: no label, no comment, no merge, no push". The new one is narrower and checkable: one comment, on the thread, when the service stops waking on it — and no label, no merge, no push, no review request, no dismissal.
+- **One sentence stops being true:** "never writes to GitHub: no label, no comment, no merge, no push". The new one is narrower and checkable: one status card per object, edited as its runs change, one alert when the service stops waking on a thread — and no label, no merge, no push, no review request, no dismissal.
 - **GitHub's grant is wider than the use.** `issues: write` also permits a label, a close, an assignment and an edit. `pull_requests: write` also permits a merge, a close, a review, a dismissal and a review request. The code refuses every one of them; the grant does not. That is the cost of a comment.
 - **The comment needs both write scopes.** A comment on a pull request is an issue comment to the API, and GitHub refuses it with `issues` alone: `403`, with `X-Accepted-GitHub-Permissions: issues=write; pull_requests=write`. So the record grants both for that call. Beyond it, `pull_requests: write` is held at the operator's request. A later act on a pull request then does not wait on a second approval by an owner. No other verb is used until a record names one.
 - **The key now speaks.** It signs for the app, so a stolen key reads what the app can read and posts as it, across the installed repositories, until the key is regenerated. The write is visible on the thread. The shared webhook secret it replaces could start runs; this cannot.

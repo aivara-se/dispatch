@@ -102,7 +102,7 @@ These three are the gate; CI runs them on every pull request and on `main`. What
 ## Documentation
 
 - [`docs/PRODUCT.md`](docs/PRODUCT.md) — what the service is for, who it is for, and how it is judged
-- [`docs/SYSTEMS.md`](docs/SYSTEMS.md) — where it runs, how a delivery becomes a run, and what is checked
+- [`docs/SYSTEMS.md`](docs/SYSTEMS.md) — where it runs, what it is built from, and the failures it answers
 
 ## License
 

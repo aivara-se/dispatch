@@ -24,3 +24,8 @@ jobs:
         run: |
           go vet ./...
           go test ./...
+
+  # The document standard, from the one checker in aivara-se/.github. This
+  # repository carries no copy of it.
+  docs:
+    uses: aivara-se/.github/.github/workflows/validate-docs.yml@main

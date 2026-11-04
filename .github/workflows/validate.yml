@@ -28,4 +28,6 @@ jobs:
   # The document standard, from the one checker in aivara-se/.github. This
   # repository carries no copy of it.
   docs:
+    permissions:
+      contents: read
     uses: aivara-se/.github/.github/workflows/validate-docs.yml@main

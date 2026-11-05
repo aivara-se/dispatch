@@ -80,7 +80,7 @@ journalctl --user -u dispatch -f    # the service's own log
 
 ## Usage
 
-The service answers one path, `POST /github` — the path the configuration names. Point the organisation webhook at it:
+The service answers `POST /github`, the path the configuration names, and serves `GET /metrics` in Prometheus text on a second loopback listener for the host's collector. Point the organisation webhook at the first:
 
 - **Payload URL** — `https://<hostname>/github`
 - **Content type** — `application/json`. A `form` webhook sends `payload=<urlencoded>`, which the JSON decode refuses; the signature verifies either way, so the tell is the content type.

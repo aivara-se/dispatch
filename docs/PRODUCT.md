@@ -10,7 +10,7 @@ GitHub posts to Dispatch when something happens in the organisation. Dispatch ve
 
 **In** — six flows: the review loop; an assignment; a failing check; a mention; a dismissed review; a draft marked ready. One run at a time per agent and object, and a wake that resumes that object's session. An audit line for every delivery. It acts on every repository in the organisation.
 
-**Not this version** — the board and its cards; team reviewers; a retry queue; counts that survive a restart; any GitHub API call; metrics (#175).
+**Not this version** — the board and its cards; team reviewers; a retry queue; counts that survive a restart; any GitHub API call.
 
 **Never** — write to GitHub; read a body for anything but a login; log a payload body or a secret; wake the operator; carry third-party text into a reason; drop a wake.
 

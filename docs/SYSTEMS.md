@@ -2,11 +2,11 @@
 
 ## Architecture
 
-One static Go process on the operator's host, as a systemd user unit on loopback behind the host's proxy, which terminates TLS. GitHub is its only public client.
+One static Go process on the operator's host: a systemd user unit on loopback behind the host's TLS proxy. GitHub is its only public client.
 
-`internal/receiver` verifies `X-Hub-Signature-256` over the raw body, with a 1 MiB bound, then decides, answers and holds the dedup cache. `internal/run` starts `hermes --profile <profile> chat -q "<reason>" --source tool -c "<title>" --create-if-missing` and reaps it. `internal/audit` appends one JSON Lines record per delivery, per boot and per run that ends non-zero, rotated by size. `internal/config` loads the JSON file and resolves the secret it names.
+`internal/receiver` verifies `X-Hub-Signature-256` over the raw body, with a 1 MiB bound, then decides, answers and holds the dedup cache. `internal/run` starts `hermes --profile <profile> chat -q "<reason>" --source tool -c "<title>" --create-if-missing` and reaps it. `internal/audit` appends a rotated JSON Lines record per delivery, boot and non-zero run. `internal/config` loads the JSON file and resolves its secret. `internal/metrics` serves Prometheus text on a second loopback listener, from counters in memory: deliveries by event and decision, a duration histogram, and follow-ups.
 
-Every other piece of state is in memory: the dedup digests, each pull request's round and failure counts, each branch's failure count, and the one delivery held per live key. `cmd/dispatch` wires them, reads the one flag and shuts down cleanly. The process calls no GitHub API and holds no credential.
+State is in memory: the dedup digests, each pull request's and branch's counts, and the one delivery held per live key. `cmd/dispatch` wires them, reads the one flag and shuts down cleanly. The process calls no GitHub API and holds no credential.
 
 The argv is a contract with Hermes, checked by hand on the host. The decisions are ADRs in `docs/adrs/`.
 
@@ -33,10 +33,11 @@ Go 1.26 and its standard library only. The `hermes` binary, by absolute path. On
 
 ## Failure modes
 
-- Wrong or missing signature: `401`, and nothing is parsed.
-- Body that is not JSON, or past 1 MiB: `400`.
-- Another event, action, review state or author association: `202`, nobody woken.
+- Wrong or missing signature: `401`, nothing parsed.
+- Body not JSON, or past 1 MiB: `400`.
+- Any other event, action, review state or association: `202`, nobody woken.
 - A cap reached on a pull request or a branch: `202`, nobody woken.
-- A run that cannot start: recorded, answered `202`, not retried.
-- A run that never exits: its key stays held until the process restarts.
+- A run that cannot start: recorded, `202`, not retried.
+- A run that never exits: its key stays held until a restart.
 - A restart: the counts are lost, and one boot line marks it.
+- A port taken: the process stops at boot.

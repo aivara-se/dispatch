@@ -107,10 +107,43 @@ func (m *memAudit) Append(r audit.Record) error {
 	return nil
 }
 
+// countingObserver is the instruments' side of the receiver: what it was told
+// to count.
+type countingObserver struct {
+	mu         sync.Mutex
+	deliveries []observation
+	followups  []string
+}
+
+// observation is one delivery as the instruments see it.
+type observation struct {
+	event    string
+	decision string
+}
+
+func (c *countingObserver) Delivery(event, decision string, took time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deliveries = append(c.deliveries, observation{event: event, decision: decision})
+}
+
+func (c *countingObserver) FollowUp(decision string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.followups = append(c.followups, decision)
+}
+
+// seen returns the counted deliveries and follow-ups.
+func (c *countingObserver) seen() ([]observation, []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]observation(nil), c.deliveries...), append([]string(nil), c.followups...)
+}
+
 func newReceiver(runner Runner) (*Receiver, *memAudit) {
 	recorder := &memAudit{}
 	agents := map[string]string{"thani-sh-meme": "meme", "thani-sh-mama": "mama"}
-	return New([]byte(testSecret), agents, runner, recorder), recorder
+	return New([]byte(testSecret), agents, runner, recorder, nil), recorder
 }
 
 func sign(body string) string {
@@ -2581,7 +2614,7 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 
 			recorder := &memAudit{}
 			agents := map[string]string{"thani-sh-meme": "meme", "thani-sh-mama": "mama"}
-			rc := New([]byte(testSecret), agents, run.New(os.Args[0]), recorder)
+			rc := New([]byte(testSecret), agents, run.New(os.Args[0]), recorder, nil)
 
 			if w := post(rc, tc.event, "d1", tc.body); w.Code != http.StatusAccepted {
 				t.Fatalf("status = %d, want 202", w.Code)
@@ -2632,7 +2665,7 @@ func TestAuditLinePerDelivery(t *testing.T) {
 	}
 	defer record.Close()
 
-	rc := New([]byte(testSecret), map[string]string{"thani-sh-meme": "meme"}, &stubRunner{}, record)
+	rc := New([]byte(testSecret), map[string]string{"thani-sh-meme": "meme"}, &stubRunner{}, record, nil)
 
 	ping := `{"zen": "anything"}`
 	if w := post(rc, "ping", "d1", ping); w.Code != http.StatusAccepted {
@@ -2682,5 +2715,51 @@ func TestSeenExpires(t *testing.T) {
 	now = now.Add(time.Hour)
 	if cache.has("key") {
 		t.Fatal("a key is still seen after the TTL")
+	}
+}
+
+func TestOneCountPerDelivery(t *testing.T) {
+	runner := &liveRunner{}
+	observer := &countingObserver{}
+	rc := New([]byte(testSecret), map[string]string{"thani-sh-meme": "meme"}, runner, &memAudit{}, observer)
+
+	// A burst on one key: the first starts, the next two are held and the later
+	// replaces the earlier, so three deliveries produce three decisions and one
+	// follow-up.
+	for _, id := range []string{"d1", "d2", "d3"} {
+		if w := post(rc, "pull_request", id, reviewBody("review_requested", "thani-sh", "thani-sh-meme")); w.Code != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", w.Code)
+		}
+	}
+	runner.exit(0, 0)
+
+	deliveries, followups := observer.seen()
+	wantDecisions := []string{audit.Started, audit.Held, audit.Held}
+	if len(deliveries) != len(wantDecisions) {
+		t.Fatalf("counted deliveries = %+v, want %d", deliveries, len(wantDecisions))
+	}
+	for i, want := range wantDecisions {
+		if deliveries[i] != (observation{event: "pull_request", decision: want}) {
+			t.Fatalf("delivery %d = %+v, want event pull_request decision %q", i, deliveries[i], want)
+		}
+	}
+	if len(followups) != 1 || followups[0] != audit.Started {
+		t.Fatalf("counted follow-ups = %q, want one %q", followups, audit.Started)
+	}
+}
+
+func TestAFollowUpThatCannotStartIsCounted(t *testing.T) {
+	runner := &liveRunner{}
+	observer := &countingObserver{}
+	rc := New([]byte(testSecret), map[string]string{"thani-sh-meme": "meme"}, runner, &memAudit{}, observer)
+
+	post(rc, "pull_request", "d1", reviewBody("review_requested", "thani-sh", "thani-sh-meme"))
+	post(rc, "pull_request", "d2", reviewBody("review_requested", "thani-sh", "thani-sh-meme"))
+	runner.err = errors.New("exec: no such file")
+	runner.exit(0, 0)
+
+	_, followups := observer.seen()
+	if len(followups) != 1 || followups[0] != audit.StartFailed {
+		t.Fatalf("counted follow-ups = %q, want one %q", followups, audit.StartFailed)
 	}
 }

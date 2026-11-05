@@ -42,12 +42,21 @@ type Recorder interface {
 	Append(audit.Record) error
 }
 
+// Observer counts what the service decided, for a collector to scrape. It is
+// called once per audit decision line and once per follow-up
+// ([`026`](docs/adrs/026-the-metrics-count-a-delivery-once.md)).
+type Observer interface {
+	Delivery(event, decision string, took time.Duration)
+	FollowUp(decision string)
+}
+
 // Receiver answers the one webhook route.
 type Receiver struct {
 	secret   []byte
 	agents   map[string]string
 	runner   Runner
 	audit    Recorder
+	observer Observer
 	seen     *seen
 	gate     *gate
 	rounds   *counter
@@ -56,13 +65,14 @@ type Receiver struct {
 }
 
 // New returns a Receiver for the given secret and configured login-to-profile
-// map.
-func New(secret []byte, agents map[string]string, runner Runner, recorder Recorder) *Receiver {
+// map. A nil observer counts nothing.
+func New(secret []byte, agents map[string]string, runner Runner, recorder Recorder, observer Observer) *Receiver {
 	return &Receiver{
 		secret:   secret,
 		agents:   agents,
 		runner:   runner,
 		audit:    recorder,
+		observer: observer,
 		seen:     newSeen(DedupTTL, time.Now),
 		gate:     newGate(),
 		rounds:   newCounter(MaxRounds),
@@ -125,6 +135,7 @@ type payload struct {
 }
 
 func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	// The signature is over these bytes, so the body is read before it can be verified.
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBody))
 	if err != nil {
@@ -167,6 +178,9 @@ func (rc *Receiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rc.decide(&rec, &p, digest(body))
 	if err := rc.audit.Append(rec); err != nil {
 		log.Printf("dispatch: audit: %v", err)
+	}
+	if rc.observer != nil {
+		rc.observer.Delivery(rec.Event, rec.Decision, time.Since(start))
 	}
 
 	w.WriteHeader(http.StatusAccepted)
@@ -363,6 +377,9 @@ func (rc *Receiver) followUp(object, profile string, d held) {
 	}
 	if err := rc.audit.Append(rec); err != nil {
 		log.Printf("dispatch: audit: %v", err)
+	}
+	if rc.observer != nil {
+		rc.observer.FollowUp(rec.Decision)
 	}
 }
 

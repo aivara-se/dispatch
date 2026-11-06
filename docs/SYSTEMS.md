@@ -12,13 +12,14 @@ The argv is a contract with Hermes, checked by hand on the host. The decisions a
 
 ### The reason
 
-The reason is identifiers and the service's own words. The ten sentences are:
+The reason is identifiers and the service's own words. The eleven sentences are:
 
 ```
 Dispatch: review requested on aivara-se/dispatch#105
 Dispatch: changes requested on aivara-se/dispatch#105
 Dispatch: approved but not armed on aivara-se/dispatch#105
 Dispatch: issue assigned on aivara-se/dispatch#124
+Dispatch: issue unassigned on aivara-se/dispatch#124
 Dispatch: pull request assigned on aivara-se/dispatch#105
 Dispatch: checks failed on aivara-se/dispatch#105
 Dispatch: checks failed on aivara-se/dispatch@main

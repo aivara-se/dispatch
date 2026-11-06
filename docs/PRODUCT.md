@@ -8,7 +8,7 @@ GitHub posts to Dispatch when something happens in the organisation. Dispatch ve
 
 ## Scope
 
-**In** — six flows: the review loop; an assignment; a failing check; a mention; a dismissed review; a draft marked ready. One run at a time per agent and object, and a wake that resumes that object's session. An audit line for every delivery. It acts on every repository in the organisation.
+**In** — six flows: the review loop; an assignment and an issue's unassignment; a failing check; a mention; a dismissed review; a draft marked ready. One run at a time per agent and object; a wake resumes that object's session. An audit line for every delivery. It acts on every repository in the organisation.
 
 **Not this version** — the board and its cards; team reviewers; a retry queue; counts that survive a restart; any GitHub API call.
 
@@ -20,8 +20,8 @@ GitHub posts to Dispatch when something happens in the organisation. Dispatch ve
 - A review that requests changes wakes the author; an approval that lands nothing wakes the author.
 - An approval that lands the change, and a review that only comments, wake nobody.
 - A round is a review that requests changes. Ten rounds per pull request; an approval spends none.
-- An assignment on an issue or a pull request wakes the assignee; no board is read.
-- An agent is never woken for its own assignment, and neither is an unconfigured login.
+- An assignment on an issue or a pull request wakes the assignee; an unassignment on an issue wakes the login that left; no board is read.
+- An unconfigured login is never woken.
 - A failing check wakes the pusher, at most five times per pull request and five per branch.
 - A passing, cancelled, timed-out or skipped run wakes nobody, and neither does a team reviewer.
 - A mention wakes each configured login it names, once, from an owner, member or collaborator.

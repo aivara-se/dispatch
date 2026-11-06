@@ -211,7 +211,8 @@ func digest(body []byte) string {
 func (rc *Receiver) decide(rec *audit.Record, p *payload, key string) {
 	review := rec.Event == "pull_request" && p.Action == "review_requested"
 	changes := rec.Event == "pull_request_review" && p.Action == "submitted" && p.Review.State == "changes_requested"
-	assigned := (rec.Event == "issues" || rec.Event == "pull_request") && p.Action == "assigned"
+	assignment := (rec.Event == "issues" || rec.Event == "pull_request") && p.Action == "assigned" ||
+		rec.Event == "issues" && p.Action == "unassigned"
 	failed := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" && len(p.WorkflowRun.PullRequests) > 0
 	redMain := rec.Event == "workflow_run" && p.Action == "completed" && p.WorkflowRun.Conclusion == "failure" &&
 		p.WorkflowRun.Event == "push" && len(p.WorkflowRun.PullRequests) == 0 &&
@@ -224,7 +225,7 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload, key string) {
 	dismissed := rec.Event == "pull_request_review" && p.Action == "dismissed" &&
 		p.PullRequest.State == "open" && !p.PullRequest.Draft && !merged(p.PullRequest.MergedAt)
 	ready := rec.Event == "pull_request" && p.Action == "ready_for_review"
-	if !review && !changes && !assigned && !failed && !redMain && !mentioned && !approved && !dismissed && !ready {
+	if !review && !changes && !assignment && !failed && !redMain && !mentioned && !approved && !dismissed && !ready {
 		rec.Decision = audit.Ignored
 		rec.Why = fmt.Sprintf("event %q with action %q is not a delivery that acts", rec.Event, p.Action)
 		return
@@ -300,7 +301,10 @@ func (rc *Receiver) decide(rec *audit.Record, p *payload, key string) {
 		}
 		login = p.Assignee.Login
 		reason = fmt.Sprintf("Dispatch: issue assigned on %s#%d", rec.Repository, rec.Number)
-		if rec.Event == "pull_request" {
+		switch {
+		case p.Action == "unassigned":
+			reason = fmt.Sprintf("Dispatch: issue unassigned on %s#%d", rec.Repository, rec.Number)
+		case rec.Event == "pull_request":
 			reason = fmt.Sprintf("Dispatch: pull request assigned on %s#%d", rec.Repository, rec.Number)
 		}
 	}

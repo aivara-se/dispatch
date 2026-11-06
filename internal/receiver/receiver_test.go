@@ -825,6 +825,62 @@ func TestIssueAssignmentWakesAssignee(t *testing.T) {
 	}
 }
 
+func TestIssueUnassignmentWakesAssignee(t *testing.T) {
+	runner := &stubRunner{}
+	rc, recorder := newReceiver(runner)
+	// The assignees array names the agents still on the issue; only the
+	// assignee object, the login that left, is the wake set.
+	body := `{
+		"action": "unassigned",
+		"repository": {"full_name": "aivara-se/dispatch"},
+		"issue": {"number": 124},
+		"assignee": {"login": "thani-sh-meme"},
+		"assignees": [{"login": "thani-sh-mama"}],
+		"sender": {"login": "thani-sh"}
+	}`
+
+	if w := post(rc, "issues", "d1", body); w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", w.Code)
+	}
+	want := call{profile: "meme", reason: "Dispatch: issue unassigned on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"}
+	if len(runner.calls) != 1 || runner.calls[0] != want {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	got := recorder.records[0]
+	if got.Decision != audit.Started || got.Number != 124 {
+		t.Fatalf("record = %+v, want started on 124", got)
+	}
+}
+
+// TestReassignmentWakesBothLogins pins that a reassignment reaches two
+// deliveries, each waking its own login once on the same issue.
+func TestReassignmentWakesBothLogins(t *testing.T) {
+	runner := &stubRunner{}
+	rc, _ := newReceiver(runner)
+
+	left := issueBodyOn(124, "unassigned", "thani-sh", "thani-sh-meme")
+	if w := post(rc, "issues", "d1", left); w.Code != http.StatusAccepted {
+		t.Fatalf("unassignment: status = %d, want 202", w.Code)
+	}
+	took := issueBodyOn(124, "assigned", "thani-sh", "thani-sh-mama")
+	if w := post(rc, "issues", "d2", took); w.Code != http.StatusAccepted {
+		t.Fatalf("assignment: status = %d, want 202", w.Code)
+	}
+
+	want := []call{
+		{profile: "meme", reason: "Dispatch: issue unassigned on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"},
+		{profile: "mama", reason: "Dispatch: issue assigned on aivara-se/dispatch#124", title: "aivara-se/dispatch#124"},
+	}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("calls = %+v, want %+v", runner.calls, want)
+	}
+	for i := range want {
+		if runner.calls[i] != want[i] {
+			t.Fatalf("calls[%d] = %+v, want %+v", i, runner.calls[i], want[i])
+		}
+	}
+}
+
 func TestPullRequestAssignmentWakesAssignee(t *testing.T) {
 	runner := &stubRunner{}
 	rc, recorder := newReceiver(runner)
@@ -860,6 +916,7 @@ func TestPullRequestAssignmentWakesNobody(t *testing.T) {
 	}{
 		{"unconfigured assignee", prAssignBody("assigned", "thani-sh", "thani-sh-missing"), "not a configured agent"},
 		{"self assigned", prAssignBody("assigned", "thani-sh-meme", "thani-sh-meme"), "actor"},
+		{"unassigned", prAssignBody("unassigned", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 		{"opened", prAssignBody("opened", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 		{"edited", prAssignBody("edited", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 	}
@@ -1978,9 +2035,10 @@ func TestIssueDeliveryWakesNobody(t *testing.T) {
 		{"opened", issueBody("opened", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 		{"edited", issueBody("edited", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 		{"labeled", issueBody("labeled", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
-		{"unassigned", issueBody("unassigned", "thani-sh", "thani-sh-meme"), "is not a delivery that acts"},
 		{"unconfigured assignee", issueBody("assigned", "thani-sh", "thani-sh-missing"), "not a configured agent"},
 		{"self assigned", issueBody("assigned", "thani-sh-meme", "thani-sh-meme"), "actor"},
+		{"unconfigured unassignment", issueBody("unassigned", "thani-sh", "thani-sh-missing"), "not a configured agent"},
+		{"self unassigned", issueBody("unassigned", "thani-sh-meme", "thani-sh-meme"), "actor"},
 	}
 
 	for _, tc := range cases {
@@ -2428,6 +2486,21 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		"label": {"name": %q}
 	}`, sentinel, sentinel, sentinel, sentinel, sentinel)
 
+	issueUnassigned := fmt.Sprintf(`{
+		"action": "unassigned",
+		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
+		"issue": {
+			"number": 124,
+			"title": %q,
+			"body": %q
+		},
+		"assignee": {"login": "thani-sh-meme"},
+		"assignees": [],
+		"sender": {"login": "thani-sh"},
+		"comment": {"body": %q},
+		"label": {"name": %q}
+	}`, sentinel, sentinel, sentinel, sentinel, sentinel)
+
 	prAssigned := fmt.Sprintf(`{
 		"action": "assigned",
 		"repository": {"full_name": "aivara-se/dispatch", "description": %q},
@@ -2563,6 +2636,11 @@ func TestEndToEndSignedPostStartsRun(t *testing.T) {
 		{
 			"issue assigned", "issues", issueAssigned, "meme",
 			"Dispatch: issue assigned on aivara-se/dispatch#124",
+			"aivara-se/dispatch#124",
+		},
+		{
+			"issue unassigned", "issues", issueUnassigned, "meme",
+			"Dispatch: issue unassigned on aivara-se/dispatch#124",
 			"aivara-se/dispatch#124",
 		},
 		{

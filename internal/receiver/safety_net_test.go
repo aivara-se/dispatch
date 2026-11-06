@@ -5,7 +5,7 @@ package receiver
 //
 //  1. the caps are not pinned in literals — every other test loops over the
 //     constant, so a changed constant moves the test with it;
-//  2. the ten dispatch types are enumerated in one table and counted in
+//  2. the eleven dispatch types are enumerated in one table and counted in
 //     nothing, so a deleted row leaves a shorter table that still passes;
 //  3. every test is one or two deliveries, so nothing fixes the order of the
 //     audit lines across a burst.
@@ -79,10 +79,10 @@ func TestTheDocumentedCapsAreTheShippedOnes(t *testing.T) {
 	}
 }
 
-// TestEveryDispatchTypeIsReachableFromASignedDelivery enumerates the ten
+// TestEveryDispatchTypeIsReachableFromASignedDelivery enumerates the eleven
 // sentences SYSTEMS.md ("The reason") lists, one row each, and checks that a
 // signed delivery still starts a run with that reason and no other. What it adds
-// to TestEndToEndSignedPostStartsRun, which posts the same ten and pins the
+// to TestEndToEndSignedPostStartsRun, which posts the same eleven and pins the
 // argv, is the count — a deleted row fails here instead of leaving a shorter
 // table — and the two-wake ready_for_review delivery. It runs on the stub
 // runner, so the count is checked on every run without a process.
@@ -121,6 +121,13 @@ func TestEveryDispatchTypeIsReachableFromASignedDelivery(t *testing.T) {
 			body:     issueBody("assigned", "thani-sh-meme", "thani-sh-mama"),
 			profiles: []string{"mama"},
 			reason:   "Dispatch: issue assigned on aivara-se/dispatch#124",
+		},
+		{
+			name:     "issue_unassigned",
+			event:    "issues",
+			body:     issueBodyOn(124, "unassigned", "thani-sh", "thani-sh-meme"),
+			profiles: []string{"meme"},
+			reason:   "Dispatch: issue unassigned on aivara-se/dispatch#124",
 		},
 		{
 			name:     "pull_request_assigned",
@@ -166,8 +173,8 @@ func TestEveryDispatchTypeIsReachableFromASignedDelivery(t *testing.T) {
 		},
 	}
 
-	if len(cases) != 10 {
-		t.Fatalf("dispatch types = %d, want the ten sentences SYSTEMS.md lists", len(cases))
+	if len(cases) != 11 {
+		t.Fatalf("dispatch types = %d, want the eleven sentences SYSTEMS.md lists", len(cases))
 	}
 
 	for _, c := range cases {

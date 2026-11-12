@@ -32,3 +32,10 @@ jobs:
     permissions:
       contents: read
     uses: aivara-se/.github/.github/workflows/validate-docs.yml@main
+
+  # The organisation's entry file, from the same standard. A copy that drifts
+  # fails here.
+  agents:
+    permissions:
+      contents: read
+    uses: aivara-se/.github/.github/workflows/validate-agents.yml@main

@@ -1,0 +1,8 @@
+{
+  "repos": ["aivara-se/*"],
+  "hermes": "/root/.local/bin/hermes",
+  "agents": {
+    "momo": { "profile": "momo" },
+    "meme": { "profile": "meme" }
+  }
+}

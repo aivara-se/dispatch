@@ -1,0 +1,20 @@
+name: validate
+
+# The v2 branch has no code yet. Its gates are the organisation's document
+# checker and its entry file.
+on:
+  pull_request:
+  push:
+    branches: [main, next]
+  merge_group:
+
+jobs:
+  validate:
+    permissions:
+      contents: read
+    uses: aivara-se/.github/.github/workflows/validate-docs.yml@main
+
+  agents:
+    permissions:
+      contents: read
+    uses: aivara-se/.github/.github/workflows/validate-agents.yml@main

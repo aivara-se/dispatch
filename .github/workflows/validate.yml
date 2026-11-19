@@ -39,7 +39,7 @@ jobs:
         with:
           bun-version: 1.4.4
 
-      - name: Install the CLI
+      - name: Install dependencies
         run: bun install --frozen-lockfile
 
       - name: Type check the CLI
@@ -47,10 +47,6 @@ jobs:
 
       - name: Test the CLI
         run: bun test cli
-
-      - name: Install the web client
-        working-directory: web
-        run: bun install --frozen-lockfile
 
       - name: Build the web client
         working-directory: web

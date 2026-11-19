@@ -42,7 +42,7 @@ const detail = {
       at: "2026-11-19T00:05:00Z",
       actions: [
         { type: "action", name: "label", value: "blocked", output: null, exit: 1 },
-        { type: "prompt", agent: "meme", output: null, exit: null, skipped: true },
+        { type: "prompt", agent: "meme", text: "read the failing task", output: null, exit: null, skipped: true },
       ],
       pc: {},
       evidence: {},
@@ -111,6 +111,9 @@ test("the server renders the record before hydration", async () => {
   expect(html).toContain("review the engine spine")
   expect(html).toContain("read the record")
   expect(html).toContain("failed · exit 1")
+  expect(html).toContain("label blocked")
+  expect(html).toContain("read the failing task")
+  expect(html).toContain("01:05")
   expect(html).toContain("skipped")
   expect(html).toContain("the label write failed")
 })
@@ -124,6 +127,7 @@ test("a blocked job opens on its failing task", async () => {
 test("the flow page lists its jobs", async () => {
   const html = await (await fetch(`http://127.0.0.1:${port}/flows/review`)).text()
   expect(html).toContain("aivara-se/dispatch#212")
+  expect(html).toContain("dispatch#212")
   expect(html).toContain("audit the socket")
 })
 

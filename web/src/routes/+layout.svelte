@@ -8,17 +8,27 @@
 
   let { data, children } = $props()
 
+  let query = $state('')
+
   onMount(() => {
     const source = new EventSource('/api/stream')
     source.onmessage = () => invalidateAll()
     return () => source.close()
   })
 
-  let all = $derived(data.flows.flatMap((flow) => flow.jobs))
+  let all = $derived(
+    data.flows
+      .flatMap((flow) => flow.jobs)
+      .filter((job) => {
+        const q = query.trim().toLowerCase()
+        if (!q) return true
+        return [job.flow, job.owner, job.repo, job.key, job.ref, job.title].some((value) => value.toLowerCase().includes(q))
+      }),
+  )
   let groups = $derived([
-    { key: 'blocked', label: 'needs attention', jobs: all.filter((job) => job.state === 'blocked') },
-    { key: 'started', label: 'running', jobs: all.filter((job) => job.state === 'started') },
-    { key: 'done', label: 'completed', jobs: all.filter((job) => job.state === 'done') },
+    { key: 'blocked', label: 'blocked', jobs: all.filter((job) => job.state === 'blocked') },
+    { key: 'started', label: 'started', jobs: all.filter((job) => job.state === 'started') },
+    { key: 'done', label: 'done', jobs: all.filter((job) => job.state === 'done') },
   ])
 
   const href = (job: Card) =>
@@ -32,6 +42,10 @@
 
 <div class="shell">
   <aside class="rail" aria-label="Jobs">
+    <div class="railtop">
+      <label class="sr" for="f-q">Search jobs</label>
+      <input id="f-q" class="search" type="search" placeholder="Search jobs" bind:value={query} />
+    </div>
     <div class="list">
       {#each groups as group}
         {#if group.jobs.length > 0}
@@ -41,7 +55,7 @@
           {#each group.jobs as job}
             <a class="item" class:current={$page.url.pathname === href(job)} href={href(job)}>
               <div class="l1">
-                <span class="rid">{job.flow} · #{job.key}</span>
+                <span class="rid">{job.flow} · {job.repo}#{job.key}</span>
                 <span class="age">{age(job.cause)}</span>
               </div>
               <div class="subject">{job.title}</div>

@@ -18,6 +18,7 @@ type PullRequest struct {
 
 // Review is one review submitted on a pull request.
 type Review struct {
+	Login       string
 	State       string
 	CommitID    string
 	SubmittedAt time.Time
@@ -44,6 +45,9 @@ func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([
 	var reviews []Review
 	for page := 1; page <= 100; page++ {
 		var body []struct {
+			User struct {
+				Login string `json:"login"`
+			} `json:"user"`
 			State       string    `json:"state"`
 			CommitID    string    `json:"commit_id"`
 			SubmittedAt time.Time `json:"submitted_at"`
@@ -54,7 +58,12 @@ func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([
 			return nil, err
 		}
 		for _, review := range body {
-			reviews = append(reviews, Review{State: review.State, CommitID: review.CommitID, SubmittedAt: review.SubmittedAt})
+			reviews = append(reviews, Review{
+				Login:       review.User.Login,
+				State:       review.State,
+				CommitID:    review.CommitID,
+				SubmittedAt: review.SubmittedAt,
+			})
 		}
 		if len(body) < perPage {
 			return reviews, nil

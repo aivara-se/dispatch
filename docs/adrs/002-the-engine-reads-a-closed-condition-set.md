@@ -8,10 +8,11 @@ A flow names what must hold before the job advances. If a flow could name any ex
 
 - A `next` key is one of five conditions:
   - `pr.created` — the delivery opens a pull request.
-  - `pr.approved` — the last review submitted on the current head is an approval.
-  - `pr.rejected` — the last review submitted on the current head requests changes.
+  - `pr.approved` — on the current head, a reviewer's latest verdict is an approval and no reviewer's is a change request.
+  - `pr.rejected` — on the current head, a reviewer's latest verdict is a change request.
   - `pr.updated` — the head is not the head the task started on.
   - `pr.merged` — the pull request is merged.
+- A reviewer's verdict is their latest review on the head. A comment and a pending review are not verdicts and leave the last one standing; a dismissed review leaves the reviewer with none.
 - `_start_` reads its keys on each delivery; every other task reads them after it ends.
 - The keys are tried in the order written; the first that holds wins.
 - A key that names no condition fails the configuration load.

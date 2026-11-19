@@ -25,8 +25,8 @@ func TestConditions(t *testing.T) {
 	reader := condition.New(source{
 		pull: github.PullRequest{Head: "s1", Merged: true},
 		reviews: []github.Review{
-			{State: "APPROVED", CommitID: "s0"},
-			{State: "CHANGES_REQUESTED", CommitID: "s1"},
+			{Login: "momo", State: "APPROVED", CommitID: "s0"},
+			{Login: "mama", State: "CHANGES_REQUESTED", CommitID: "s1"},
 		},
 	})
 	cases := []struct {
@@ -55,21 +55,75 @@ func TestConditions(t *testing.T) {
 	}
 }
 
-func TestApprovedIsTheLastReviewOnTheHead(t *testing.T) {
-	reader := condition.New(source{
-		pull: github.PullRequest{Head: "s1"},
-		reviews: []github.Review{
-			{State: "CHANGES_REQUESTED", CommitID: "s1"},
-			{State: "APPROVED", CommitID: "s1"},
-			{State: "COMMENTED", CommitID: "s0"},
+func TestTheApprovalHoldsEachReviewersVerdict(t *testing.T) {
+	cases := []struct {
+		name     string
+		reviews  []github.Review
+		approved bool
+		rejected bool
+	}{
+		{
+			name: "a comment leaves an approval standing",
+			reviews: []github.Review{
+				{Login: "momo", State: "APPROVED", CommitID: "s1"},
+				{Login: "momo", State: "COMMENTED", CommitID: "s1"},
+			},
+			approved: true,
 		},
-	})
-	got, _, err := reader.Holds(context.Background(), "pr.approved", "aivara-se", "dispatch", 212, "s0")
-	if err != nil {
-		t.Fatal(err)
+		{
+			name: "a pending review leaves an approval standing",
+			reviews: []github.Review{
+				{Login: "momo", State: "APPROVED", CommitID: "s1"},
+				{Login: "momo", State: "PENDING", CommitID: "s1"},
+			},
+			approved: true,
+		},
+		{
+			name: "a change request holds against another reviewer's approval",
+			reviews: []github.Review{
+				{Login: "mama", State: "CHANGES_REQUESTED", CommitID: "s1"},
+				{Login: "momo", State: "APPROVED", CommitID: "s1"},
+			},
+			rejected: true,
+		},
+		{
+			name: "a reviewer's later approval replaces the change request",
+			reviews: []github.Review{
+				{Login: "mama", State: "CHANGES_REQUESTED", CommitID: "s1"},
+				{Login: "mama", State: "APPROVED", CommitID: "s1"},
+			},
+			approved: true,
+		},
+		{
+			name: "a dismissed review is no verdict",
+			reviews: []github.Review{
+				{Login: "momo", State: "APPROVED", CommitID: "s1"},
+				{Login: "momo", State: "DISMISSED", CommitID: "s1"},
+			},
+		},
+		{
+			name: "a verdict on another head is not read",
+			reviews: []github.Review{
+				{Login: "momo", State: "APPROVED", CommitID: "s0"},
+			},
+		},
 	}
-	if !got {
-		t.Fatal("the last review on the head is an approval")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := condition.New(source{pull: github.PullRequest{Head: "s1"}, reviews: tc.reviews})
+			for key, want := range map[string]bool{"pr.approved": tc.approved, "pr.rejected": tc.rejected} {
+				got, read, err := reader.Holds(context.Background(), key, "aivara-se", "dispatch", 212, "s0")
+				if err != nil {
+					t.Fatalf("%s: %v", key, err)
+				}
+				if got != want {
+					t.Fatalf("%s = %v, want %v", key, got, want)
+				}
+				if read == nil {
+					t.Fatalf("%s: no evidence", key)
+				}
+			}
+		})
 	}
 }
 

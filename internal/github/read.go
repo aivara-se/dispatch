@@ -38,23 +38,29 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 	return PullRequest{Head: body.Head.SHA, Merged: body.Merged}, nil
 }
 
-// Reviews reads the reviews submitted on a pull request.
+// Reviews reads every review submitted on a pull request, oldest first.
 func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([]Review, error) {
-	var body []struct {
-		State       string    `json:"state"`
-		CommitID    string    `json:"commit_id"`
-		SubmittedAt time.Time `json:"submitted_at"`
+	const perPage = 100
+	var reviews []Review
+	for page := 1; page <= 100; page++ {
+		var body []struct {
+			State       string    `json:"state"`
+			CommitID    string    `json:"commit_id"`
+			SubmittedAt time.Time `json:"submitted_at"`
+		}
+		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=%d&page=%d",
+			url.PathEscape(owner), url.PathEscape(repo), number, perPage, page)
+		if err := c.read(ctx, owner, repo, path, &body); err != nil {
+			return nil, err
+		}
+		for _, review := range body {
+			reviews = append(reviews, Review{State: review.State, CommitID: review.CommitID, SubmittedAt: review.SubmittedAt})
+		}
+		if len(body) < perPage {
+			return reviews, nil
+		}
 	}
-	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=100",
-		url.PathEscape(owner), url.PathEscape(repo), number)
-	if err := c.read(ctx, owner, repo, path, &body); err != nil {
-		return nil, err
-	}
-	reviews := make([]Review, 0, len(body))
-	for _, review := range body {
-		reviews = append(reviews, Review{State: review.State, CommitID: review.CommitID, SubmittedAt: review.SubmittedAt})
-	}
-	return reviews, nil
+	return nil, fmt.Errorf("github: %s/%s#%d: reviews exceed 100 pages", owner, repo, number)
 }
 
 func (c *Client) read(ctx context.Context, owner, repo, path string, out any) error {

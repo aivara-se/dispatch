@@ -90,6 +90,25 @@ func TestMissingSessionLeavesToolsEmpty(t *testing.T) {
 	}
 }
 
+func TestRunReportsABrokenStore(t *testing.T) {
+	binary := fakeBinary(t)
+	t.Setenv("ARGS_FILE", filepath.Join(t.TempDir(), "args"))
+	t.Setenv("FAKE_SESSION", "s1")
+	home := t.TempDir()
+	dir := filepath.Join(home, "profiles", "memo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.db"), []byte("not a database"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HERMES_HOME", home)
+
+	if _, err := hermes.New(binary).Run(context.Background(), "memo", "Fix it.", "212"); err == nil {
+		t.Fatal("a store it cannot read passed as no tool calls")
+	}
+}
+
 func fakeBinary(t *testing.T) string {
 	t.Helper()
 	source, err := os.ReadFile("testdata/hermes.sh")

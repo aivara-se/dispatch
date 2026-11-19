@@ -78,13 +78,22 @@ func (s *Store) BeginTask(ctx context.Context, jobID int64, name, head string) (
 }
 
 // FinishTask writes a task's state, the condition that decided it and its
-// evidence. An empty tools value keeps what an earlier run wrote.
-func (s *Store) FinishTask(ctx context.Context, taskID int64, state, pc, evidence, tools string) error {
-	_, err := s.db.ExecContext(ctx,
+// evidence. An empty tools value keeps what an earlier run wrote. A task that
+// another writer ended keeps its row, so a close that interrupted a task wins
+// over the runner's tail; the report says whether the write landed.
+func (s *Store) FinishTask(ctx context.Context, taskID int64, state, pc, evidence, tools string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE tasks SET state = ?, pc = ?, evidence = ?, tools = COALESCE(NULLIF(?, ''), tools), ended_at = ?
-		 WHERE id = ?`,
-		state, pc, evidence, tools, stamp(time.Now()), taskID)
-	return err
+		 WHERE id = ? AND state IN (?, ?)`,
+		state, pc, evidence, tools, stamp(time.Now()), taskID, state, TaskRunning)
+	if err != nil {
+		return false, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows == 1, nil
 }
 
 // BeginAction records an action before it runs, so a crash leaves it pending.
@@ -104,11 +113,13 @@ func (s *Store) BeginAction(ctx context.Context, taskID int64, ordinal int, acti
 	return res.LastInsertId()
 }
 
-// FinishAction writes the action's output and exit.
+// FinishAction writes the action's output and exit. An action whose task a
+// close ended keeps no exit, so the write is scoped to a running task.
 func (s *Store) FinishAction(ctx context.Context, actionID int64, output string, exit int) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE actions SET output = ?, exit = ?, ended_at = ? WHERE id = ?`,
-		output, exit, stamp(time.Now()), actionID)
+		`UPDATE actions SET output = ?, exit = ?, ended_at = ?
+		 WHERE id = ? AND (SELECT state FROM tasks WHERE tasks.id = actions.task_id) = ?`,
+		output, exit, stamp(time.Now()), actionID, TaskRunning)
 	return err
 }
 

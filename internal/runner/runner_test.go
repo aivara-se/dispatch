@@ -30,6 +30,7 @@ type launch struct {
 	tools   string
 	err     error
 	block   bool
+	release chan struct{}
 	started chan struct{}
 	done    chan struct{}
 }
@@ -50,6 +51,9 @@ func (l *launch) Run(ctx context.Context, profile, text, session string) (hermes
 			close(l.done)
 		}
 		return hermes.Result{}, ctx.Err()
+	}
+	if l.release != nil {
+		<-l.release
 	}
 	return hermes.Result{Output: l.output, Exit: l.exit, Tools: l.tools}, l.err
 }
@@ -346,6 +350,53 @@ func TestKillStopsTheAction(t *testing.T) {
 	}
 	if current.State != record.StateStarted {
 		t.Fatalf("job = %s", current.State)
+	}
+}
+
+func TestACloseKeepsTheTaskItInterrupted(t *testing.T) {
+	// The close lands while the action runs, so no cancellation saves the
+	// record: the tail must not write over the interrupted task, nor advance
+	// a job the close ended.
+	store, job, r, launch, _ := newHarness(t, "single", "run", "single-212", &conditions{
+		head:  "s1",
+		holds: map[string]bool{"pr.approved": true},
+	})
+	launch.release = make(chan struct{})
+	launch.started = make(chan struct{}, 1)
+
+	r.Start(job)
+	select {
+	case <-launch.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the action did not start")
+	}
+	if _, err := store.EndJobs(context.Background(), "aivara-se", "dispatch", 212, true); err != nil {
+		t.Fatal(err)
+	}
+	close(launch.release)
+	time.Sleep(200 * time.Millisecond)
+
+	ended, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended.State != record.StateDone || ended.Verdict != record.VerdictPassed {
+		t.Fatalf("job = %s/%s", ended.State, ended.Verdict)
+	}
+	if ended.Task != "run" {
+		t.Fatalf("the runner advanced a job it lost to %q", ended.Task)
+	}
+	tasks, err := store.Tasks(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].State != record.TaskInterrupted {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	for _, action := range tasks[0].Actions {
+		if action.Exit != nil {
+			t.Fatalf("the interrupted action recorded exit %d", *action.Exit)
+		}
 	}
 }
 

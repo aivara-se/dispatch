@@ -27,7 +27,8 @@ const goodFlow = `{
     "_start_": { "next": { "pr.created": "review" } },
     "review": {
       "actions": [
-        { "type": "prompt", "agent": "memo", "text": "Review {pr.url}." }
+        { "type": "prompt", "agent": "memo", "text": "Review {pr.url}." },
+        { "type": "action", "name": "label", "value": "blocked" }
       ],
       "limit": { "turn": 1, "time": 60 },
       "next": { "pr.approved": "follow", "pr.rejected": "_done_" }
@@ -126,6 +127,13 @@ func TestLoadRefusesInvalidConfiguration(t *testing.T) {
 			flow:     strings.Replace(goodFlow, `"pr.created": "review"`, `"pr.created": "missing"`, 1),
 			file:     "review.json",
 			key:      "tasks._start_.next.pr.created",
+		},
+		{
+			name:     "label value is not blocked",
+			dispatch: goodDispatch,
+			flow:     strings.Replace(goodFlow, `"value": "blocked"`, `"value": "ready-to-merge"`, 1),
+			file:     "review.json",
+			key:      "tasks.review.actions[1].value",
 		},
 		{
 			name:     "missing limit",

@@ -56,7 +56,7 @@ func TestEndJobs(t *testing.T) {
 		verdict string
 	}{
 		{name: "unmerged", merged: false, state: record.StateBlocked, verdict: record.VerdictFailed},
-		{name: "merged", merged: true, state: record.StateDone, verdict: record.VerdictPending},
+		{name: "merged", merged: true, state: record.StateDone, verdict: record.VerdictPassed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,6 +86,85 @@ func TestEndJobs(t *testing.T) {
 				t.Fatalf("second end = %d", len(ended))
 			}
 		})
+	}
+}
+
+func TestMergedClosePassesTheJob(t *testing.T) {
+	// ADR 009: the merge is the effect the flow wanted, so the close passes.
+	ctx := context.Background()
+	store := open(t)
+	if _, _, err := store.EnsureJob(ctx, start("review", 7, "7")); err != nil {
+		t.Fatal(err)
+	}
+	ended, err := store.EndJobs(ctx, "aivara-se", "dispatch", 7, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ended) != 1 || ended[0].State != record.StateDone || ended[0].Verdict != record.VerdictPassed {
+		t.Fatalf("ended = %+v", ended)
+	}
+	job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != record.StateDone || job.Verdict != record.VerdictPassed {
+		t.Fatalf("job = %s/%s", job.State, job.Verdict)
+	}
+}
+
+func TestMergedCloseEndsItsRunningTask(t *testing.T) {
+	// A close kills the task in flight. The record ends it interrupted, with
+	// its end written, so a done job never answers beside a running task.
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	store, err := record.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	job, _, err := store.EnsureJob(ctx, start("review", 7, "7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.BeginTask(ctx, job.ID, "merge", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionID, err := store.BeginAction(ctx, task.ID, 0, record.Action{Type: "prompt", Agent: "meme", Text: "Merge."})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.EndJobs(ctx, "aivara-se", "dispatch", 7, true); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := store.Tasks(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].State != record.TaskInterrupted {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var endedAt sql.NullString
+	if err := db.QueryRow(`SELECT ended_at FROM tasks WHERE id = ?`, task.ID).Scan(&endedAt); err != nil {
+		t.Fatal(err)
+	}
+	if !endedAt.Valid || endedAt.String == "" {
+		t.Fatal("the interrupted task recorded no end")
+	}
+	var exit sql.NullInt64
+	if err := db.QueryRow(`SELECT exit FROM actions WHERE id = ?`, actionID).Scan(&exit); err != nil {
+		t.Fatal(err)
+	}
+	if exit.Valid {
+		t.Fatalf("a killed action recorded exit %d", exit.Int64)
 	}
 }
 

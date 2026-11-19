@@ -372,7 +372,7 @@ func TestClosedPullRequestEndsEveryJob(t *testing.T) {
 		verdict string
 	}{
 		{name: "unmerged", merged: false, state: record.StateBlocked, verdict: record.VerdictFailed},
-		{name: "merged", merged: true, state: record.StateDone, verdict: record.VerdictPending},
+		{name: "merged", merged: true, state: record.StateDone, verdict: record.VerdictPassed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

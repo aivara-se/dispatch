@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,7 +19,7 @@ import (
 type call struct {
 	profile string
 	text    string
-	key     string
+	session string
 }
 
 type launch struct {
@@ -33,9 +34,9 @@ type launch struct {
 	done    chan struct{}
 }
 
-func (l *launch) Run(ctx context.Context, profile, text, key string) (hermes.Result, error) {
+func (l *launch) Run(ctx context.Context, profile, text, session string) (hermes.Result, error) {
 	l.mu.Lock()
-	l.calls = append(l.calls, call{profile: profile, text: text, key: key})
+	l.calls = append(l.calls, call{profile: profile, text: text, session: session})
 	l.mu.Unlock()
 	if l.started != nil {
 		select {
@@ -75,13 +76,14 @@ func (c *conditions) Holds(_ context.Context, key, _ string, _ string, _ int, _ 
 type labeler struct {
 	mu    sync.Mutex
 	calls int
+	err   error
 }
 
 func (l *labeler) Block(context.Context, string, string, int) error {
 	l.mu.Lock()
 	l.calls++
 	l.mu.Unlock()
-	return nil
+	return l.err
 }
 
 func (l *labeler) count() int {
@@ -134,7 +136,7 @@ func TestRunsActionsInOrder(t *testing.T) {
 	if len(launch.calls) != 1 {
 		t.Fatalf("launches = %d", len(launch.calls))
 	}
-	if launch.calls[0].profile != "momo" || launch.calls[0].text != "Review https://github.com/aivara-se/dispatch/pull/212." || launch.calls[0].key != "212" {
+	if launch.calls[0].profile != "momo" || launch.calls[0].text != "Review https://github.com/aivara-se/dispatch/pull/212." || launch.calls[0].session != "review/aivara-se/dispatch/212" {
 		t.Fatalf("call = %+v", launch.calls[0])
 	}
 	if labels.count() != 1 {
@@ -218,6 +220,46 @@ func TestNoConditionHoldsBlocks(t *testing.T) {
 	tasks, _ := store.Tasks(context.Background(), job.ID)
 	if !strings.Contains(tasks[0].PC, "pr.rejected") {
 		t.Fatalf("pc = %s", tasks[0].PC)
+	}
+}
+
+func TestAFailedLabelKeepsTheStopReason(t *testing.T) {
+	store, job, r, _, labels := newHarness(t, "single", "run", "single-212", &conditions{head: "s1"})
+	labels.err = errors.New("403 Forbidden")
+
+	r.Start(job)
+	ended := wait(t, store, "single")
+	if ended.State != record.StateBlocked || ended.Verdict != record.VerdictFailed {
+		t.Fatalf("job = %s/%s", ended.State, ended.Verdict)
+	}
+	if !strings.Contains(ended.Alert, "no condition holds") || !strings.Contains(ended.Alert, "403 Forbidden") {
+		t.Fatalf("alert = %q", ended.Alert)
+	}
+}
+
+func TestTwoRepositoriesShareNoSession(t *testing.T) {
+	store, job, r, launch, _ := newHarness(t, "single", "run", "single-212", &conditions{
+		head:  "s1",
+		holds: map[string]bool{"pr.approved": true},
+	})
+	r.Start(job)
+	wait(t, store, "single")
+
+	other, _, err := store.EnsureJob(context.Background(), record.Start{
+		Flow: "single", Owner: "aivara-se", Repo: "keysmash", Number: 212, Key: "single-212",
+		Title: "another", Link: "https://github.com/aivara-se/keysmash/pull/212", Task: "run",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Start(*other)
+	waitRepo(t, store, "single", "keysmash")
+
+	if len(launch.calls) != 2 {
+		t.Fatalf("launches = %d", len(launch.calls))
+	}
+	if launch.calls[0].session == launch.calls[1].session {
+		t.Fatalf("both jobs resume %q", launch.calls[0].session)
 	}
 }
 
@@ -335,9 +377,14 @@ func newHarness(t *testing.T, flowName, taskName, key string, cond *conditions) 
 
 func wait(t *testing.T, store *record.Store, flow string) record.Job {
 	t.Helper()
+	return waitRepo(t, store, flow, "dispatch")
+}
+
+func waitRepo(t *testing.T, store *record.Store, flow, repo string) record.Job {
+	t.Helper()
 	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
-		job, err := store.Job(context.Background(), flow, "aivara-se", "dispatch", 212)
+		job, err := store.Job(context.Background(), flow, "aivara-se", repo, 212)
 		if err == nil && job.State != record.StateStarted {
 			return *job
 		}

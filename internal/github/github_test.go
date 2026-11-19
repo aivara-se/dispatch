@@ -118,7 +118,7 @@ func TestReadsPullRequestAndReviews(t *testing.T) {
 			}
 			w.Write([]byte(`{"head":{"sha":"s1"},"merged":true}`))
 		case r.URL.Path == "/repos/aivara-se/dispatch/pulls/212/reviews":
-			w.Write([]byte(`[{"state":"APPROVED","commit_id":"s1","submitted_at":"2026-11-19T00:00:00Z"}]`))
+			w.Write([]byte(`[{"user":{"login":"momo"},"state":"APPROVED","commit_id":"s1","submitted_at":"2026-11-19T00:00:00Z"}]`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -140,7 +140,7 @@ func TestReadsPullRequestAndReviews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reviews) != 1 || reviews[0].State != "APPROVED" || reviews[0].CommitID != "s1" {
+	if len(reviews) != 1 || reviews[0].Login != "momo" || reviews[0].State != "APPROVED" || reviews[0].CommitID != "s1" {
 		t.Fatalf("reviews = %+v", reviews)
 	}
 }
@@ -161,7 +161,7 @@ func TestReviewsFollowPages(t *testing.T) {
 					if i > 0 {
 						body.WriteString(",")
 					}
-					body.WriteString(`{"state":"COMMENTED","commit_id":"s0","submitted_at":"2026-11-19T00:00:00Z"}`)
+					body.WriteString(`{"user":{"login":"momo"},"state":"COMMENTED","commit_id":"s0","submitted_at":"2026-11-19T00:00:00Z"}`)
 				}
 				body.WriteString("]")
 				w.Write([]byte(body.String()))

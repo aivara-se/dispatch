@@ -61,26 +61,34 @@ func (r *Reader) Holds(ctx context.Context, key, owner, repo string, number int,
 		if err != nil {
 			return false, nil, err
 		}
-		state := lastOnHead(reviews, pull.Head)
-		holds := state == "APPROVED"
-		if key == "pr.rejected" {
-			holds = state == "CHANGES_REQUESTED"
+		verdicts := verdictsOnHead(reviews, pull.Head)
+		approved, rejected := false, false
+		for _, state := range verdicts {
+			approved = approved || state == "APPROVED"
+			rejected = rejected || state == "CHANGES_REQUESTED"
 		}
-		return holds, evidence(map[string]any{"head": pull.Head, "review": state}), nil
+		holds := approved && !rejected
+		if key == "pr.rejected" {
+			holds = rejected
+		}
+		return holds, evidence(map[string]any{"head": pull.Head, "reviews": verdicts}), nil
 	default:
 		return false, nil, fmt.Errorf("condition: unknown key %q", key)
 	}
 }
 
-// lastOnHead returns the state of the last review submitted on head.
-func lastOnHead(reviews []github.Review, head string) string {
-	state := ""
+// verdictsOnHead returns each reviewer's latest verdict on head, by login. A
+// comment or a pending review is not a verdict, so it leaves the last one
+// standing.
+func verdictsOnHead(reviews []github.Review, head string) map[string]string {
+	verdicts := map[string]string{}
 	for _, review := range reviews {
-		if review.CommitID == head {
-			state = review.State
+		if review.CommitID != head || review.State == "COMMENTED" || review.State == "PENDING" {
+			continue
 		}
+		verdicts[review.Login] = review.State
 	}
-	return state
+	return verdicts
 }
 
 func evidence(value any) json.RawMessage {

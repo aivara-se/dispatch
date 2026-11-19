@@ -193,7 +193,10 @@ func (r *Runner) run(ctx context.Context, job record.Job) {
 				return
 			}
 			if failed {
-				r.store.FinishTask(ctx, current.ID, record.TaskFailed, "", "", tools)
+				if _, err := r.store.FinishTask(ctx, current.ID, record.TaskFailed, "", "", tools); err != nil {
+					r.stop(ctx, job, err.Error())
+					return
+				}
 				r.stop(ctx, job, "an action failed")
 				return
 			}
@@ -203,12 +206,18 @@ func (r *Runner) run(ctx context.Context, job record.Job) {
 
 		target, pc, evidence, holds, err := r.next(ctx, job, task, current.Head)
 		if err != nil {
-			r.store.FinishTask(ctx, current.ID, record.TaskFailed, pc, evidence, current.Tools)
+			_, _ = r.store.FinishTask(ctx, current.ID, record.TaskFailed, pc, evidence, current.Tools)
 			r.stop(ctx, job, err.Error())
 			return
 		}
-		if err := r.store.FinishTask(ctx, current.ID, record.TaskDone, pc, evidence, current.Tools); err != nil {
+		changed, err := r.store.FinishTask(ctx, current.ID, record.TaskDone, pc, evidence, current.Tools)
+		if err != nil {
 			r.stop(ctx, job, err.Error())
+			return
+		}
+		if !changed {
+			// A close interrupted this task while it ran, so the record is no
+			// longer ours to advance.
 			return
 		}
 		r.announce(job)

@@ -168,6 +168,83 @@ func TestMergedCloseEndsItsRunningTask(t *testing.T) {
 	}
 }
 
+func TestALateWriteKeepsAnInterruptedTask(t *testing.T) {
+	// ADR 009:15-16: the close wins. The runner's tail that arrives after it
+	// changes nothing, so the task keeps interrupted and its action no exit.
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	store, err := record.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	job, _, err := store.EnsureJob(ctx, start("review", 7, "7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.BeginTask(ctx, job.ID, "merge", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginAction(ctx, task.ID, 0, record.Action{Type: "prompt", Agent: "meme", Text: "Merge."}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EndJobs(ctx, "aivara-se", "dispatch", 7, true); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := store.FinishTask(ctx, task.ID, record.TaskDone, "merged", "s1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("a late write ended the interrupted task")
+	}
+	tasks, err := store.Tasks(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].State != record.TaskInterrupted {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+}
+
+func TestAnInterruptedActionKeepsNoExit(t *testing.T) {
+	// ADR 009:16: a killed action keeps no exit, so the write that lands after
+	// the close changes nothing.
+	ctx := context.Background()
+	store := open(t)
+	job, _, err := store.EnsureJob(ctx, start("review", 7, "7"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.BeginTask(ctx, job.ID, "merge", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionID, err := store.BeginAction(ctx, task.ID, 0, record.Action{Type: "prompt", Agent: "meme", Text: "Merge."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EndJobs(ctx, "aivara-se", "dispatch", 7, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishAction(ctx, actionID, "merged", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := store.Tasks(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || len(tasks[0].Actions) != 1 {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	if action := tasks[0].Actions[0]; action.Exit != nil || action.Output != "" {
+		t.Fatalf("action = %+v", action)
+	}
+}
+
 func TestRecordDeliveryKeepsOneID(t *testing.T) {
 	ctx := context.Background()
 	store := open(t)

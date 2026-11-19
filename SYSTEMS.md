@@ -15,7 +15,7 @@ GitHub posts deliveries; the server reads pull requests and reviews, and writes 
 
 ### Deployment
 
-Each part is a systemd unit on the operator's host. The client runs as the engine's user, because the socket is `0600`, and listens on loopback. The proxy sends `/dispatch*` to it; the webhook's longer path still wins.
+The server and the client are systemd units on the operator's host. The client runs as the engine's user, because the socket is `0600`, and listens on loopback. The proxy sends `/dispatch*` to it; the webhook's longer path still wins.
 
 ## Dependencies
 

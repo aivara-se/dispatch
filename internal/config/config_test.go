@@ -102,6 +102,13 @@ func TestLoadRefusesInvalidConfiguration(t *testing.T) {
 			key:      "tasks._start_.next.pr.opened",
 		},
 		{
+			name:     "start on merged",
+			dispatch: goodDispatch,
+			flow:     strings.Replace(goodFlow, `"pr.created": "review"`, `"pr.merged": "review"`, 1),
+			file:     "review.json",
+			key:      "tasks._start_.next.pr.merged",
+		},
+		{
 			name:     "unknown target",
 			dispatch: goodDispatch,
 			flow:     strings.Replace(goodFlow, `"pr.created": "review"`, `"pr.created": "missing"`, 1),

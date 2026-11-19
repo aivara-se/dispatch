@@ -86,6 +86,7 @@ type harness struct {
 	labeler engine.Labeler
 	stub    *stubLabeler
 	events  []string
+	alerts  []string
 }
 
 type stubLabeler struct {
@@ -148,6 +149,10 @@ func newHarnessWith(t *testing.T, flows map[string]string, labeler engine.Labele
 
 func (h *harness) publish(flow, owner, repo, key string) {
 	h.events = append(h.events, flow+"/"+owner+"/"+repo+"/"+key)
+	job, err := h.store.JobByKey(context.Background(), flow, owner, repo, key)
+	if err == nil {
+		h.alerts = append(h.alerts, job.Alert)
+	}
 }
 
 type delivery struct {
@@ -407,6 +412,9 @@ func TestRejectedLabelIsRecorded(t *testing.T) {
 	}
 	if h.stub.calls != 1 {
 		t.Fatalf("label calls = %d", h.stub.calls)
+	}
+	if len(h.alerts) == 0 || h.alerts[len(h.alerts)-1] == "" {
+		t.Fatalf("the event carried no alert: %v", h.alerts)
 	}
 	if deliveries := h.count("deliveries"); deliveries != 2 {
 		t.Fatalf("deliveries = %d", deliveries)

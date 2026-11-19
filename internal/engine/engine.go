@@ -62,9 +62,6 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 		if err != nil {
 			return err
 		}
-		for _, job := range ended {
-			e.announce(job)
-		}
 		touched = len(ended) > 0
 	}
 
@@ -99,6 +96,11 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 				return err
 			}
 		}
+	}
+
+	// Announce after the write, so a client that refetches reads the alert.
+	for _, job := range ended {
+		e.announce(job)
 	}
 
 	if !touched {

@@ -1,4 +1,4 @@
-# 007 The CLI reads the record
+# 034 The CLI reads the record
 
 ## Context
 

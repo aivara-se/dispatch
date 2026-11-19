@@ -16,10 +16,13 @@ import (
 	"time"
 
 	"github.com/aivara-se/dispatch/internal/api"
+	"github.com/aivara-se/dispatch/internal/condition"
 	"github.com/aivara-se/dispatch/internal/config"
 	"github.com/aivara-se/dispatch/internal/engine"
 	"github.com/aivara-se/dispatch/internal/github"
+	"github.com/aivara-se/dispatch/internal/hermes"
 	"github.com/aivara-se/dispatch/internal/record"
+	"github.com/aivara-se/dispatch/internal/runner"
 	"github.com/aivara-se/dispatch/internal/webhook"
 )
 
@@ -78,7 +81,13 @@ func run(args []string) error {
 		names = append(names, flow.Name)
 	}
 	hub := api.NewHub()
-	handler := webhook.NewHandler([]byte(secret), engine.New(store, cfg.Repos, flows, app, hub.Publish).Deliver)
+	profiles := make(map[string]string, len(cfg.Agents))
+	for name, agent := range cfg.Agents {
+		profiles[name] = agent.Profile
+	}
+	jobRunner := runner.New(store, flows, *configDir, profiles,
+		hermes.New(cfg.Hermes), condition.New(app), app, hub.Publish)
+	handler := webhook.NewHandler([]byte(secret), engine.New(store, cfg.Repos, flows, app, hub.Publish, jobRunner).Deliver)
 
 	webhookServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -107,6 +116,10 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := jobRunner.Resume(ctx); err != nil {
+		return err
+	}
+
 	served := make(chan error, 2)
 	go func() {
 		log.Printf("dispatch: listening on %s%s", cfg.Listen, cfg.Path)
@@ -127,6 +140,7 @@ func run(args []string) error {
 
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	jobRunner.Close()
 	if err := apiServer.Shutdown(shutdown); err != nil {
 		return err
 	}

@@ -1,0 +1,13 @@
+{
+  "listen": "127.0.0.1:8645",
+  "path": "/github",
+  "secret_name": "DISPATCH_TEST_SECRET",
+  "app_id": 1,
+  "key_path": "/tmp/key.pem",
+  "repos": ["aivara-se/*"],
+  "hermes": "/bin/true",
+  "agents": {
+    "memo": { "profile": "memo" },
+    "momo": { "profile": "momo" }
+  }
+}

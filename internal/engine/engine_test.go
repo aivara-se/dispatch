@@ -87,6 +87,16 @@ type harness struct {
 	stub    *stubLabeler
 	events  []string
 	alerts  []string
+	started []string
+	killed  []string
+}
+
+func (h *harness) Start(job record.Job) {
+	h.started = append(h.started, job.Key)
+}
+
+func (h *harness) Kill(owner, repo string, number int) {
+	h.killed = append(h.killed, owner+"/"+repo+"#"+strconv.Itoa(number))
 }
 
 type stubLabeler struct {
@@ -137,7 +147,7 @@ func newHarnessWith(t *testing.T, flows map[string]string, labeler engine.Labele
 	}
 	mux := http.NewServeMux()
 	h := &harness{t: t, store: store, dbPath: dbPath, labeler: labeler}
-	mux.Handle(cfg.Path, webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded, h.labeler, h.publish).Deliver))
+	mux.Handle(cfg.Path, webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded, h.labeler, h.publish, h).Deliver))
 	server := httptest.NewServer(mux)
 	h.server = server
 	t.Cleanup(func() {
@@ -262,6 +272,12 @@ func TestOpenedDeliveryStartsOneJob(t *testing.T) {
 	if job.State != record.StateStarted || job.Verdict != record.VerdictPending || job.Key != "212" {
 		t.Fatalf("job = %+v", job)
 	}
+	if job.Task != "review" {
+		t.Fatalf("task = %q", job.Task)
+	}
+	if len(h.started) != 1 || h.started[0] != "212" {
+		t.Fatalf("started = %v", h.started)
+	}
 	if job.Title != "a title" || job.Link != "https://github.com/aivara-se/dispatch/pull/212" {
 		t.Fatalf("job title = %q, link = %q", job.Title, job.Link)
 	}
@@ -375,6 +391,9 @@ func TestClosedPullRequestEndsEveryJob(t *testing.T) {
 				if job.State != tc.state || job.Verdict != tc.verdict {
 					t.Fatalf("%s job = %s/%s", flow, job.State, job.Verdict)
 				}
+			}
+			if len(h.killed) != 1 || h.killed[0] != "aivara-se/dispatch#212" {
+				t.Fatalf("killed = %v", h.killed)
 			}
 			wantCalls := 1
 			if tc.merged {

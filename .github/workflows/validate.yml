@@ -1,7 +1,5 @@
 name: validate
 
-# The v2 branch has no code yet. Its gates are the organisation's document
-# checker and its entry file.
 on:
   pull_request:
   push:
@@ -10,10 +8,34 @@ on:
 
 jobs:
   validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet, build and test
+        run: |
+          go vet ./...
+          go build ./...
+          go test ./...
+
+  # The document standard, from the one checker in aivara-se/.github. This
+  # repository carries no copy of it.
+  docs:
     permissions:
       contents: read
     uses: aivara-se/.github/.github/workflows/validate-docs.yml@main
 
+  # The organisation's entry file, from the same standard. A copy that drifts
+  # fails here.
   agents:
     permissions:
       contents: read

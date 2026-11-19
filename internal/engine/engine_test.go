@@ -1,0 +1,392 @@
+package engine_test
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/aivara-se/dispatch/internal/config"
+	"github.com/aivara-se/dispatch/internal/engine"
+	"github.com/aivara-se/dispatch/internal/record"
+	"github.com/aivara-se/dispatch/internal/webhook"
+)
+
+const dispatchFile = `{
+  "listen": "127.0.0.1:8645",
+  "path": "/github",
+  "secret_name": "DISPATCH_WEBHOOK_SECRET",
+  "repos": ["aivara-se/*"],
+  "hermes": "/usr/local/bin/hermes",
+  "agents": { "memo": { "profile": "memo" } }
+}`
+
+const reviewFlow = `{
+  "key": "{n}",
+  "tasks": {
+    "_start_": { "next": { "pr.created": "review" } },
+    "review": {
+      "actions": [],
+      "limit": { "turn": 1, "time": 60 },
+      "next": { "pr.approved": "_done_" }
+    }
+  }
+}`
+
+const approveFlow = `{
+  "key": "approve-{n}",
+  "tasks": {
+    "_start_": { "next": { "pr.approved": "note" } },
+    "note": {
+      "actions": [],
+      "limit": { "turn": 1, "time": 60 },
+      "next": { "pr.rejected": "_done_" }
+    }
+  }
+}`
+
+const auditFlow = `{
+  "key": "audit-{n}",
+  "tasks": {
+    "_start_": { "next": { "pr.created": "audit" } },
+    "audit": {
+      "actions": [],
+      "limit": { "turn": 1, "time": 60 },
+      "next": { "pr.merged": "_done_" }
+    }
+  }
+}`
+
+const updatedFlow = `{
+  "key": "{n}",
+  "tasks": {
+    "_start_": { "next": { "pr.updated": "note" } },
+    "note": {
+      "actions": [],
+      "limit": { "turn": 1, "time": 60 },
+      "next": { "pr.merged": "_done_" }
+    }
+  }
+}`
+
+var secret = []byte("s3cret")
+
+type harness struct {
+	t      *testing.T
+	store  *record.Store
+	server *httptest.Server
+	dbPath string
+}
+
+func newHarness(t *testing.T, flows map[string]string) *harness {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "flows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dispatch.json"), []byte(dispatchFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range flows {
+		if err := os.WriteFile(filepath.Join(dir, "flows", name+".json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg, loaded, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	dbPath := filepath.Join(dir, "dispatch.db")
+	store, err := record.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open record: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle(cfg.Path, webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded).Deliver))
+	server := httptest.NewServer(mux)
+	h := &harness{t: t, store: store, server: server, dbPath: dbPath}
+	t.Cleanup(func() {
+		server.Close()
+		store.Close()
+	})
+	return h
+}
+
+type delivery struct {
+	id           string
+	event        string
+	action       string
+	owner        string
+	repo         string
+	number       int
+	merged       bool
+	review       string
+	badSignature bool
+}
+
+func (h *harness) post(d delivery) int {
+	h.t.Helper()
+	if d.event == "" {
+		d.event = webhook.KindPullRequest
+	}
+	if d.id == "" {
+		d.id = "d1"
+	}
+	if d.owner == "" {
+		d.owner = "aivara-se"
+	}
+	if d.repo == "" {
+		d.repo = "dispatch"
+	}
+	payload := struct {
+		Action     string `json:"action"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+		PullRequest struct {
+			Number int  `json:"number"`
+			Merged bool `json:"merged"`
+		} `json:"pull_request"`
+		Review *struct {
+			State string `json:"state"`
+		} `json:"review,omitempty"`
+	}{Action: d.action}
+	payload.Repository.FullName = d.owner + "/" + d.repo
+	payload.PullRequest.Number = d.number
+	payload.PullRequest.Merged = d.merged
+	if d.review != "" {
+		payload.Review = &struct {
+			State string `json:"state"`
+		}{State: d.review}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+
+	key := secret
+	if d.badSignature {
+		key = []byte("another secret")
+	}
+	request, err := http.NewRequest(http.MethodPost, h.server.URL+"/github", strings.NewReader(string(body)))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	request.Header.Set("X-GitHub-Event", d.event)
+	request.Header.Set("X-GitHub-Delivery", d.id)
+	request.Header.Set("X-Hub-Signature-256", sign(key, body))
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	response.Body.Close()
+	return response.StatusCode
+}
+
+func (h *harness) count(table string) int {
+	h.t.Helper()
+	db, err := sql.Open("sqlite", "file:"+h.dbPath)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil {
+		h.t.Fatalf("count %s: %v", table, err)
+	}
+	return n
+}
+
+func (h *harness) job(flow string) *record.Job {
+	h.t.Helper()
+	job, err := h.store.Job(context.Background(), flow, "aivara-se", "dispatch", 212)
+	if err != nil {
+		h.t.Fatalf("job %s: %v", flow, err)
+	}
+	return job
+}
+
+func TestOpenedDeliveryStartsOneJob(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	if status := h.post(delivery{action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	job := h.job("review")
+	if job.State != record.StateStarted || job.Verdict != record.VerdictPending || job.Key != "212" {
+		t.Fatalf("job = %+v", job)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 1 || deliveries != 1 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+func TestDuplicateDeliveryStartsNoSecondJob(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	for i := 0; i < 2; i++ {
+		if status := h.post(delivery{action: "opened", number: 212}); status != http.StatusAccepted {
+			t.Fatalf("post %d status = %d", i, status)
+		}
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 1 || deliveries != 1 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+func TestSecondDeliveryStartsNoSecondJob(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	if status := h.post(delivery{id: "d1", action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("first status = %d", status)
+	}
+	if status := h.post(delivery{id: "d2", action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("second status = %d", status)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 1 || deliveries != 2 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+func TestBadSignatureWritesNothing(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	if status := h.post(delivery{action: "opened", number: 212, badSignature: true}); status != http.StatusUnauthorized {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 0 || deliveries != 0 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+func TestUnservedRepositoryStartsNothing(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	if status := h.post(delivery{action: "opened", number: 212, owner: "other", repo: "repo"}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 0 || deliveries != 0 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+func TestEventThatStartsNoFlowWritesNothing(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	if status := h.post(delivery{action: "edited", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 0 || deliveries != 0 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+func TestStartOnUpdatedStartsNothing(t *testing.T) {
+	h := newHarness(t, map[string]string{"updated": updatedFlow})
+	if status := h.post(delivery{action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs := h.count("jobs"); jobs != 0 {
+		t.Fatalf("jobs = %d", jobs)
+	}
+}
+
+func TestReviewStartsOnlyTheFlowThatNamesIt(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow, "approve": approveFlow})
+	if status := h.post(delivery{
+		id:     "review-1",
+		event:  webhook.KindPullRequestReview,
+		action: "submitted",
+		review: "approved",
+		number: 212,
+	}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	job := h.job("approve")
+	if job.State != record.StateStarted || job.Key != "approve-212" {
+		t.Fatalf("approve job = %+v", job)
+	}
+	if _, err := h.store.Job(context.Background(), "review", "aivara-se", "dispatch", 212); !errors.Is(err, record.ErrNotFound) {
+		t.Fatalf("review job error = %v", err)
+	}
+}
+
+func TestClosedPullRequestEndsEveryJob(t *testing.T) {
+	cases := []struct {
+		name    string
+		merged  bool
+		state   string
+		verdict string
+	}{
+		{name: "unmerged", merged: false, state: record.StateBlocked, verdict: record.VerdictFailed},
+		{name: "merged", merged: true, state: record.StateDone, verdict: record.VerdictPassed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, map[string]string{"review": reviewFlow, "audit": auditFlow})
+			if status := h.post(delivery{id: "open-1", action: "opened", number: 212}); status != http.StatusAccepted {
+				t.Fatalf("open status = %d", status)
+			}
+			if jobs := h.count("jobs"); jobs != 2 {
+				t.Fatalf("jobs before close = %d", jobs)
+			}
+			if status := h.post(delivery{id: "close-1", action: "closed", number: 212, merged: tc.merged}); status != http.StatusAccepted {
+				t.Fatalf("close status = %d", status)
+			}
+			for _, flow := range []string{"review", "audit"} {
+				job := h.job(flow)
+				if job.State != tc.state || job.Verdict != tc.verdict {
+					t.Fatalf("%s job = %s/%s", flow, job.State, job.Verdict)
+				}
+			}
+		})
+	}
+}
+
+func TestReopenedRecordFindsTheJob(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	if status := h.post(delivery{action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if err := h.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := record.Open(h.dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store.Close()
+	job, err := store.Job(context.Background(), "review", "aivara-se", "dispatch", 212)
+	if err != nil {
+		t.Fatalf("job after reopen: %v", err)
+	}
+	if job.Key != "212" || job.State != record.StateStarted {
+		t.Fatalf("job = %+v", job)
+	}
+	if jobs := h.count("jobs"); jobs != 1 {
+		t.Fatalf("jobs = %d", jobs)
+	}
+}
+
+func TestTwoFlowsStartTwoJobs(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow, "audit": auditFlow})
+	if status := h.post(delivery{action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 2 || deliveries != 1 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+	if h.job("review").Key != "212" || h.job("audit").Key != "audit-212" {
+		t.Fatalf("keys = %q, %q", h.job("review").Key, h.job("audit").Key)
+	}
+}
+
+func sign(key, body []byte) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}

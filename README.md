@@ -4,7 +4,12 @@ Dispatch is the process engine for the `aivara-se` agent fleet. It reads a GitHu
 
 ## Run it locally
 
-The engine is not built yet.
+```sh
+go build ./cmd/dispatch
+DISPATCH_WEBHOOK_SECRET=... ./dispatch --config config
+```
+
+`--db` names the record, by default `~/.dispatch/dispatch.db`. The secret is read from the environment variable `config/dispatch.json` names.
 
 ## Use it
 
@@ -13,6 +18,11 @@ The server serves the record on a Unix socket; the CLI and the web client read i
 ## Check it
 
 ```sh
+gofmt -l .        # empty
+go vet ./...
+go build ./...
+TMPDIR=$HOME/tmp go test ./...
+
 # From a checkout of aivara-se/.github:
 bun run scripts/validate-docs.ts <path to this repository> --require
 ```

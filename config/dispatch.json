@@ -1,4 +1,7 @@
 {
+  "listen": "127.0.0.1:8645",
+  "path": "/github",
+  "secret_name": "DISPATCH_WEBHOOK_SECRET",
   "repos": ["aivara-se/*"],
   "hermes": "/root/.local/bin/hermes",
   "agents": {

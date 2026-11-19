@@ -147,18 +147,14 @@ func (s *Store) EnsureJob(ctx context.Context, flow, owner, repo string, number 
 	return job, changed == 1, nil
 }
 
-// EndJobs ends every started job for a pull request: done and passed when it
-// merged, blocked and failed when it closed unmerged. It returns how many
-// jobs it ended.
-func (s *Store) EndJobs(ctx context.Context, owner, repo string, number int, merged bool) (int64, error) {
-	state, verdict := StateBlocked, VerdictFailed
-	if merged {
-		state, verdict = StateDone, VerdictPassed
-	}
+// EndJobs ends every started job for a pull request. A job that ends here did
+// not reach _done_, so ADR 003 permits only a failed verdict. It returns how
+// many jobs it ended.
+func (s *Store) EndJobs(ctx context.Context, owner, repo string, number int) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET state = ?, verdict = ?, updated_at = ?
 		 WHERE owner = ? AND repo = ? AND number = ? AND state = ?`,
-		state, verdict, stamp(time.Now()), owner, repo, number, StateStarted)
+		StateBlocked, VerdictFailed, stamp(time.Now()), owner, repo, number, StateStarted)
 	if err != nil {
 		return 0, err
 	}

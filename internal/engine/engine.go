@@ -46,14 +46,6 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 	}
 
 	touched := false
-	if event.Kind == webhook.KindPullRequest && event.Action == "closed" {
-		ended, err := e.store.EndJobs(ctx, event.Owner, event.Repo, event.Number, event.Merged)
-		if err != nil {
-			return err
-		}
-		touched = ended > 0
-	}
-
 	holds := holding(event)
 	for _, flow := range e.flows {
 		if _, ok := startTarget(flow, holds); !ok {
@@ -64,6 +56,17 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 			return err
 		}
 		touched = true
+	}
+
+	// A close runs after the starts, so a flow that starts on pr.merged is
+	// created and ended by the same delivery. A closed pull request never
+	// leaves a job in started (ADR 006).
+	if event.Kind == webhook.KindPullRequest && event.Action == "closed" {
+		ended, err := e.store.EndJobs(ctx, event.Owner, event.Repo, event.Number)
+		if err != nil {
+			return err
+		}
+		touched = touched || ended > 0
 	}
 
 	if !touched {

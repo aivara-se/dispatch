@@ -81,6 +81,7 @@ var secret = []byte("s3cret")
 type harness struct {
 	t       *testing.T
 	store   *record.Store
+	handler *webhook.Handler
 	server  *httptest.Server
 	dbPath  string
 	labeler engine.Labeler
@@ -147,7 +148,8 @@ func newHarnessWith(t *testing.T, flows map[string]string, labeler engine.Labele
 	}
 	mux := http.NewServeMux()
 	h := &harness{t: t, store: store, dbPath: dbPath, labeler: labeler}
-	mux.Handle(cfg.Path, webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded, h.labeler, h.publish, h).Deliver))
+	h.handler = webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded, h.labeler, h.publish, h).Deliver)
+	mux.Handle(cfg.Path, h.handler)
 	server := httptest.NewServer(mux)
 	h.server = server
 	t.Cleanup(func() {
@@ -237,6 +239,13 @@ func (h *harness) post(d delivery) int {
 		h.t.Fatal(err)
 	}
 	response.Body.Close()
+	// The handler answers 202 before it applies the delivery, so the test waits
+	// for the queue the way a restart would.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.handler.Wait(ctx); err != nil {
+		h.t.Fatalf("wait for delivery %s: %v", d.id, err)
+	}
 	return response.StatusCode
 }
 

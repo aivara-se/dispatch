@@ -400,6 +400,38 @@ func TestACloseKeepsTheTaskItInterrupted(t *testing.T) {
 	}
 }
 
+func TestATaskDoneBeforeTheCrashFinishesOnResume(t *testing.T) {
+	// FinishTask wrote done and the crash came before SetTask. The resumed job
+	// finishes that task again, so the write must land on the done row.
+	store, job, r, launch, _ := newHarness(t, "single", "run", "single-212", &conditions{
+		head:  "s1",
+		holds: map[string]bool{"pr.approved": true},
+	})
+	begun, err := store.BeginTask(context.Background(), job.ID, "run", "s0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FinishTask(context.Background(), begun.ID, record.TaskDone, "{}", "{}", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTaskID(context.Background(), job.ID, begun.ID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.Start(*reloaded)
+	ended := wait(t, store, "single")
+	if ended.State != record.StateDone || ended.Verdict != record.VerdictPassed {
+		t.Fatalf("job = %s/%s", ended.State, ended.Verdict)
+	}
+	if launch.count() != 0 {
+		t.Fatalf("the finished task reran its action: %d", launch.count())
+	}
+}
+
 func newHarness(t *testing.T, flowName, taskName, key string, cond *conditions) (*record.Store, record.Job, *runner.Runner, *launch, *labeler) {
 	t.Helper()
 	_, flows, err := config.Load("testdata")

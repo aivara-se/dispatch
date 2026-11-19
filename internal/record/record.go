@@ -23,11 +23,19 @@ const (
 	StateDone    = "done"
 )
 
-// A job's verdict: pending, failed, or passed only at a success.
+// A job's verdict: pending, failed, or passed at a success.
 const (
 	VerdictPending = "pending"
 	VerdictFailed  = "failed"
 	VerdictPassed  = "passed"
+)
+
+// A task's state: running, or ended as done, failed or interrupted.
+const (
+	TaskRunning     = "running"
+	TaskDone        = "done"
+	TaskFailed      = "failed"
+	TaskInterrupted = "interrupted"
 )
 
 // ErrNotFound reports a job the record does not hold.
@@ -241,25 +249,48 @@ func (s *Store) EnsureJob(ctx context.Context, start Start) (*Job, bool, error) 
 	return job, changed == 1, nil
 }
 
-// EndJobs ends every started job for a pull request: done and pending when it
-// merged, blocked and failed when it closed unmerged (docs/adrs/008). A job
-// that ends here did not reach _done_, so no close writes passed
-// (docs/adrs/003). It returns the jobs it ended.
+// EndJobs ends every started job for a pull request and returns the jobs it
+// ended. A merged close writes done and passed (docs/adrs/009); an unmerged
+// close writes blocked and failed (docs/adrs/002). A task still running under
+// an ended job is interrupted, with its end recorded, so a done job never
+// shows a task in progress.
 func (s *Store) EndJobs(ctx context.Context, owner, repo string, number int, merged bool) ([]Job, error) {
 	state, verdict := StateBlocked, VerdictFailed
 	if merged {
-		state, verdict = StateDone, VerdictPending
+		state, verdict = StateDone, VerdictPassed
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`UPDATE jobs SET state = ?, verdict = ?, updated_at = ?
-		 WHERE owner = ? AND repo = ? AND number = ? AND state = ?
-		 RETURNING `+jobFields,
-		state, verdict, stamp(time.Now()), owner, repo, number, StateStarted)
+	now := stamp(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return scanJobs(rows)
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET state = ?, ended_at = ?
+		 WHERE state = ? AND job_id IN (
+		     SELECT id FROM jobs WHERE owner = ? AND repo = ? AND number = ? AND state = ?)`,
+		TaskInterrupted, now, TaskRunning, owner, repo, number, StateStarted); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.QueryContext(ctx,
+		`UPDATE jobs SET state = ?, verdict = ?, updated_at = ?
+		 WHERE owner = ? AND repo = ? AND number = ? AND state = ?
+		 RETURNING `+jobFields,
+		state, verdict, now, owner, repo, number, StateStarted)
+	if err != nil {
+		return nil, err
+	}
+	jobs, err := scanJobs(rows)
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return jobs, nil
 }
 
 // SetAlert records a message on every job for a pull request.

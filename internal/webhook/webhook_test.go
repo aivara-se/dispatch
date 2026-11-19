@@ -47,12 +47,13 @@ func TestParse(t *testing.T) {
 	event, err := webhook.Parse(header, []byte(`{
 		"action": "opened",
 		"repository": { "full_name": "aivara-se/dispatch" },
-		"pull_request": { "number": 212 }
+		"pull_request": { "number": 212, "title": "evict counts", "html_url": "https://github.com/aivara-se/dispatch/pull/212" }
 	}`))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	want := webhook.Event{ID: "d1", Kind: webhook.KindPullRequest, Action: "opened", Owner: "aivara-se", Repo: "dispatch", Number: 212}
+	want := webhook.Event{ID: "d1", Kind: webhook.KindPullRequest, Action: "opened", Owner: "aivara-se", Repo: "dispatch", Number: 212,
+		Title: "evict counts", Link: "https://github.com/aivara-se/dispatch/pull/212"}
 	if event != want {
 		t.Fatalf("event = %+v", event)
 	}

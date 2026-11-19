@@ -67,7 +67,7 @@ type Agent struct {
 }
 
 // Config is dispatch.json: the repositories served, the Hermes binary, the
-// agents and the listening address.
+// agents, the listening address and the GitHub App.
 type Config struct {
 	Repos      []string         `json:"repos"`
 	Hermes     string           `json:"hermes"`
@@ -75,6 +75,8 @@ type Config struct {
 	Listen     string           `json:"listen"`
 	Path       string           `json:"path"`
 	SecretName string           `json:"secret_name"`
+	AppID      int64            `json:"app_id"`
+	KeyPath    string           `json:"key_path"`
 }
 
 // Condition is one key of a next map, kept in the order the file wrote it.
@@ -187,6 +189,12 @@ func (c *Config) validate(file string) error {
 	}
 	if c.SecretName == "" {
 		return keyError(file, "secret_name", "required")
+	}
+	if c.AppID <= 0 {
+		return keyError(file, "app_id", "required")
+	}
+	if c.KeyPath == "" {
+		return keyError(file, "key_path", "required")
 	}
 	if !filepath.IsAbs(c.Hermes) {
 		return keyError(file, "hermes", "must be an absolute path")

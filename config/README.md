@@ -7,6 +7,8 @@ This directory is an example; a deployment brings its own. The `review` flow her
 - `listen` — the address the server binds.
 - `path` — the URL path GitHub posts to.
 - `secret_name` — the environment variable holding the webhook secret; the file never holds it.
+- `app_id` — the GitHub App's numeric id.
+- `key_path` — the path to the App's private key; the engine reads it at boot and never logs it.
 - `repos` — the repositories the engine serves: `owner/*` or `owner/name`.
 - `hermes` — the absolute path to the Hermes binary.
 - `agents` — a name and the Hermes profile that runs it.

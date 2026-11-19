@@ -12,6 +12,8 @@ const configFile = `{
   "listen": "127.0.0.1:0",
   "path": "/github",
   "secret_name": "DISPATCH_WEBHOOK_SECRET",
+  "app_id": 123456,
+  "key_path": "/tmp/app.pem",
   "repos": ["aivara-se/*"],
   "hermes": "/usr/local/bin/hermes",
   "agents": {}

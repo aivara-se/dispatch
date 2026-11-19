@@ -145,6 +145,48 @@ func TestReadsPullRequestAndReviews(t *testing.T) {
 	}
 }
 
+func TestReviewsFollowPages(t *testing.T) {
+	_, keyPEM := newKey(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/aivara-se/dispatch/installation":
+			w.Write([]byte(`{"id":9}`))
+		case "/app/installations/9/access_tokens":
+			w.Write([]byte(`{"token":"secret-token-value","expires_at":"` + time.Now().Add(time.Hour).Format(time.RFC3339) + `"}`))
+		case "/repos/aivara-se/dispatch/pulls/212/reviews":
+			if r.URL.Query().Get("page") == "1" {
+				var body strings.Builder
+				body.WriteString("[")
+				for i := 0; i < 100; i++ {
+					if i > 0 {
+						body.WriteString(",")
+					}
+					body.WriteString(`{"state":"COMMENTED","commit_id":"s0","submitted_at":"2026-11-19T00:00:00Z"}`)
+				}
+				body.WriteString("]")
+				w.Write([]byte(body.String()))
+				return
+			}
+			w.Write([]byte(`[{"state":"APPROVED","commit_id":"s1","submitted_at":"2026-11-19T01:00:00Z"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := github.New(123456, keyPEM, server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews, err := client.Reviews(context.Background(), "aivara-se", "dispatch", 212)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reviews) != 101 || reviews[100].State != "APPROVED" || reviews[100].CommitID != "s1" {
+		t.Fatalf("reviews = %d, last = %+v", len(reviews), reviews[len(reviews)-1])
+	}
+}
+
 func newKey(t *testing.T) (*rsa.PrivateKey, []byte) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

@@ -108,15 +108,21 @@ func (r *Runner) tools(profile, session string) (string, error) {
 	if session == "" || r.home == "" {
 		return "", nil
 	}
-	db, err := sql.Open("sqlite", "file:"+r.stateDB(profile)+"?mode=ro&_pragma=busy_timeout(2000)")
-	if err != nil {
+	path := r.stateDB(profile)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro&_pragma=busy_timeout(2000)")
+	if err != nil {
+		return "", err
 	}
 	defer db.Close()
 	rows, err := db.Query(
 		`SELECT tool_calls FROM messages WHERE session_id = ? AND tool_calls IS NOT NULL ORDER BY id`, session)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	defer rows.Close()
 	var calls []json.RawMessage

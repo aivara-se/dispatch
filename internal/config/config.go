@@ -333,6 +333,9 @@ func (a Action) validate(path, key string, cfg *Config) error {
 		if a.Value == "" {
 			return keyError(path, key+".value", "required")
 		}
+		if a.Value != "blocked" {
+			return keyError(path, key+".value", `the only label is "blocked"`)
+		}
 	default:
 		return keyError(path, key+".type", fmt.Sprintf("unknown type %q", a.Type))
 	}

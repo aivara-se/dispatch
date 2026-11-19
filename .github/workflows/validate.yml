@@ -8,10 +8,18 @@ on:
 
 jobs:
   validate:
+    # The ruleset requires `validate` alone, and a skipped job satisfies it.
+    # So this job runs even when a document job fails, and fails with it.
+    needs: [docs, agents]
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
+      - name: Require the document jobs
+        if: needs.docs.result != 'success' || needs.agents.result != 'success'
+        run: exit 1
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7

@@ -1,6 +1,6 @@
 # Dispatch
 
-Dispatch is the process engine for the `aivara-se` agent fleet. It reads a GitHub delivery, decides the next task in a job, prompts the Hermes profile that owns it, and proves the step on GitHub before it advances. Agents keep their own credentials; the engine reads, and writes only the labels a flow names. [`PRODUCT.md`](PRODUCT.md) says what it does; [`SYSTEMS.md`](SYSTEMS.md) says how it is shaped.
+Dispatch is the process engine for the `aivara-se` agent fleet. It reads a GitHub delivery, decides the next task in a job, prompts the Hermes profile that owns it, and proves the step on GitHub before it advances. Agents keep their own credentials; the engine reads, and writes only the `blocked` label. [`PRODUCT.md`](PRODUCT.md) says what it does; [`SYSTEMS.md`](SYSTEMS.md) says how it is shaped.
 
 ## Run it locally
 

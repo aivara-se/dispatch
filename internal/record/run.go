@@ -66,7 +66,7 @@ func (s *Store) BeginTask(ctx context.Context, jobID int64, name, head string) (
 	at := stamp(time.Now())
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO tasks (job_id, name, n, state, head, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		jobID, name, n, "running", head, at)
+		jobID, name, n, TaskRunning, head, at)
 	if err != nil {
 		return Task{}, err
 	}
@@ -74,7 +74,7 @@ func (s *Store) BeginTask(ctx context.Context, jobID int64, name, head string) (
 	if err != nil {
 		return Task{}, err
 	}
-	return Task{ID: id, N: n, Short: name, State: "running", Head: head, At: at}, nil
+	return Task{ID: id, N: n, Short: name, State: TaskRunning, Head: head, At: at}, nil
 }
 
 // FinishTask writes a task's state, the condition that decided it and its

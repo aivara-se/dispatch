@@ -178,12 +178,12 @@ func (r *Runner) run(ctx context.Context, job record.Job) {
 			job.TaskID = begun.ID
 			current = &begun
 		}
-		if current.State == "failed" {
+		if current.State == record.TaskFailed {
 			r.stop(ctx, job, "task failed")
 			return
 		}
 
-		if current.State == "running" {
+		if current.State == record.TaskRunning {
 			tools, failed, err := r.actions(ctx, job, task, *current)
 			if ctx.Err() != nil {
 				return
@@ -193,21 +193,21 @@ func (r *Runner) run(ctx context.Context, job record.Job) {
 				return
 			}
 			if failed {
-				r.store.FinishTask(ctx, current.ID, "failed", "", "", tools)
+				r.store.FinishTask(ctx, current.ID, record.TaskFailed, "", "", tools)
 				r.stop(ctx, job, "an action failed")
 				return
 			}
 			current.Tools = tools
-			current.State = "done"
+			current.State = record.TaskDone
 		}
 
 		target, pc, evidence, holds, err := r.next(ctx, job, task, current.Head)
 		if err != nil {
-			r.store.FinishTask(ctx, current.ID, "failed", pc, evidence, current.Tools)
+			r.store.FinishTask(ctx, current.ID, record.TaskFailed, pc, evidence, current.Tools)
 			r.stop(ctx, job, err.Error())
 			return
 		}
-		if err := r.store.FinishTask(ctx, current.ID, "done", pc, evidence, current.Tools); err != nil {
+		if err := r.store.FinishTask(ctx, current.ID, record.TaskDone, pc, evidence, current.Tools); err != nil {
 			r.stop(ctx, job, err.Error())
 			return
 		}

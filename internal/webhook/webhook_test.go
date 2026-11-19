@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aivara-se/dispatch/internal/webhook"
 )
@@ -113,6 +114,15 @@ func TestHandler(t *testing.T) {
 		"pull_request": { "number": 212 }
 	}`)
 
+	wait := func() {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := handler.Wait(ctx); err != nil {
+			t.Fatalf("wait: %v", err)
+		}
+	}
+
 	post := func(signature, event string, payload []byte) *http.Response {
 		request, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(string(payload)))
 		if err != nil {
@@ -134,6 +144,7 @@ func TestHandler(t *testing.T) {
 	if response := post(sign(secret, body), webhook.KindPullRequest, body); response.StatusCode != http.StatusAccepted {
 		t.Fatalf("valid status = %d", response.StatusCode)
 	}
+	wait()
 	if len(delivered) != 1 || delivered[0].Number != 212 {
 		t.Fatalf("delivered = %+v", delivered)
 	}
@@ -141,6 +152,7 @@ func TestHandler(t *testing.T) {
 	if response := post(sign([]byte("other"), body), webhook.KindPullRequest, body); response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("bad signature status = %d", response.StatusCode)
 	}
+	wait()
 	if len(delivered) != 1 {
 		t.Fatalf("delivered after bad signature = %d", len(delivered))
 	}
@@ -149,6 +161,7 @@ func TestHandler(t *testing.T) {
 	if response := post(sign(secret, other), "issues", other); response.StatusCode != http.StatusAccepted {
 		t.Fatalf("ignored event status = %d", response.StatusCode)
 	}
+	wait()
 	if len(delivered) != 1 {
 		t.Fatalf("delivered after ignored event = %d", len(delivered))
 	}
@@ -164,6 +177,71 @@ func TestHandler(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status = %d", response.StatusCode)
+	}
+}
+
+func TestHandlerAnswersBeforeTheDelivery(t *testing.T) {
+	// The reply must not wait on the work: a delivery that calls GitHub can
+	// outlast the request GitHub waits for.
+	started := make(chan struct{})
+	release := make(chan struct{}, 1)
+	var deadline, applied bool
+	handler := webhook.NewHandler(secret, func(ctx context.Context, event webhook.Event) error {
+		_, deadline = ctx.Deadline()
+		close(started)
+		<-release
+		applied = true
+		return nil
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+
+	body := []byte(`{
+		"action": "opened",
+		"repository": { "full_name": "aivara-se/dispatch" },
+		"pull_request": { "number": 212 }
+	}`)
+	request, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-GitHub-Event", webhook.KindPullRequest)
+	request.Header.Set("X-GitHub-Delivery", "d1")
+	request.Header.Set("X-Hub-Signature-256", sign(secret, body))
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("the reply waited for the delivery: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the queued delivery never ran")
+	}
+	if !deadline {
+		t.Fatal("the delivery ran without a deadline")
+	}
+
+	release <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := handler.Wait(ctx); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if !applied {
+		t.Fatal("the queued delivery was not applied")
 	}
 }
 

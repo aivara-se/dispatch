@@ -140,11 +140,19 @@ func run(args []string) error {
 
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	jobRunner.Close()
 	if err := apiServer.Shutdown(shutdown); err != nil {
 		return err
 	}
-	return webhookServer.Shutdown(shutdown)
+	if err := webhookServer.Shutdown(shutdown); err != nil {
+		return err
+	}
+	// Answering 202 queues the work, so a stop waits for the queue to apply
+	// before the record closes under it.
+	if err := handler.Wait(shutdown); err != nil {
+		return fmt.Errorf("deliveries at shutdown: %w", err)
+	}
+	jobRunner.Close()
+	return nil
 }
 
 func pathHandler(path string, handler http.Handler) http.Handler {

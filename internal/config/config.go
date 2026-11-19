@@ -255,6 +255,11 @@ func loadFlow(path string, cfg *Config) (Flow, error) {
 	if err := validateNext(path, "tasks._start_.next", flow.Start, known); err != nil {
 		return Flow{}, err
 	}
+	for _, c := range flow.Start {
+		if c.Key == ConditionMerged {
+			return Flow{}, keyError(path, "tasks._start_.next."+c.Key, "a close ends the job it would start")
+		}
+	}
 	for _, name := range names {
 		var tf struct {
 			Actions []Action `json:"actions"`

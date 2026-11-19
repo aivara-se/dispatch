@@ -41,30 +41,43 @@ func TestEnsureJobCreatesOneJob(t *testing.T) {
 
 func TestEndJobs(t *testing.T) {
 	ctx := context.Background()
-	store := open(t)
-	if _, _, err := store.EnsureJob(ctx, "review", "aivara-se", "dispatch", 7, "7"); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name    string
+		merged  bool
+		state   string
+		verdict string
+	}{
+		{name: "unmerged", merged: false, state: record.StateBlocked, verdict: record.VerdictFailed},
+		{name: "merged", merged: true, state: record.StateDone, verdict: record.VerdictPending},
 	}
-	ended, err := store.EndJobs(ctx, "aivara-se", "dispatch", 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ended != 1 {
-		t.Fatalf("ended = %d", ended)
-	}
-	job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if job.State != record.StateBlocked || job.Verdict != record.VerdictFailed {
-		t.Fatalf("job = %s/%s", job.State, job.Verdict)
-	}
-	ended, err = store.EndJobs(ctx, "aivara-se", "dispatch", 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ended != 0 {
-		t.Fatalf("second end = %d", ended)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := open(t)
+			if _, _, err := store.EnsureJob(ctx, "review", "aivara-se", "dispatch", 7, "7"); err != nil {
+				t.Fatal(err)
+			}
+			ended, err := store.EndJobs(ctx, "aivara-se", "dispatch", 7, tc.merged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ended != 1 {
+				t.Fatalf("ended = %d", ended)
+			}
+			job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.State != tc.state || job.Verdict != tc.verdict {
+				t.Fatalf("job = %s/%s", job.State, job.Verdict)
+			}
+			ended, err = store.EndJobs(ctx, "aivara-se", "dispatch", 7, tc.merged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ended != 0 {
+				t.Fatalf("second end = %d", ended)
+			}
+		})
 	}
 }
 

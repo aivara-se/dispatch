@@ -11,6 +11,17 @@ DISPATCH_WEBHOOK_SECRET=... ./dispatch --config config
 
 `--db` names the record (default `~/.dispatch/dispatch.db`); `--socket` names the API socket (default `~/.dispatch/dispatch.sock`). The secret is read from the environment variable `secret_name` names; the App key is the file `key_path` names.
 
+The web client reads that socket on the server:
+
+```sh
+cd web
+bun install
+bun run build
+node build
+```
+
+It serves on `:3000` (`PORT` changes it) and reads `DISPATCH_SOCKET`.
+
 ## Use it
 
 The server serves the record on a Unix socket; the CLI and the web client read it. See [`config/`](config/), an example, and the [decisions](docs/adrs/).
@@ -25,6 +36,12 @@ TMPDIR=$HOME/tmp go test ./...
 
 bun install --frozen-lockfile
 bun x tsc -p tsconfig.json --noEmit
+bun test cli
+
+cd web
+bun install --frozen-lockfile
+bun run build
+bun run check
 bun test
 
 # From a checkout of aivara-se/.github:

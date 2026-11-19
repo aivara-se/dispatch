@@ -5,7 +5,7 @@
   "scripts": {
     "dispatch": "bun run cli/dispatch.ts",
     "check": "bun x tsc -p tsconfig.json --noEmit",
-    "test": "bun test"
+    "test": "bun test cli"
   },
   "bin": {
     "dispatch": "cli/dispatch.ts"

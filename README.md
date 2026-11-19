@@ -27,4 +27,4 @@ TMPDIR=$HOME/tmp go test ./...
 bun run scripts/validate-docs.ts <path to this repository> --require
 ```
 
-CI runs the same checker in the `validate` job.
+CI runs the same checker in the `docs` job.

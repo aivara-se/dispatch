@@ -238,15 +238,16 @@ type taskView struct {
 }
 
 type actionView struct {
-	Type   string   `json:"type"`
-	Output *string  `json:"output"`
-	Exit   *int     `json:"exit"`
-	Agent  string   `json:"agent,omitempty"`
-	Text   string   `json:"text,omitempty"`
-	Path   string   `json:"path,omitempty"`
-	Args   []string `json:"args,omitempty"`
-	Name   string   `json:"name,omitempty"`
-	Value  string   `json:"value,omitempty"`
+	Type    string   `json:"type"`
+	Output  *string  `json:"output"`
+	Exit    *int     `json:"exit"`
+	Skipped bool     `json:"skipped,omitempty"`
+	Agent   string   `json:"agent,omitempty"`
+	Text    string   `json:"text,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Args    []string `json:"args,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Value   string   `json:"value,omitempty"`
 }
 
 func cardOf(job record.Job) jobCard {
@@ -280,7 +281,7 @@ func taskOf(task record.Task) taskView {
 		Tools:    raw(task.Tools),
 	}
 	for _, action := range task.Actions {
-		item := actionView{Type: action.Type, Exit: action.Exit}
+		item := actionView{Type: action.Type, Exit: action.Exit, Skipped: action.Skipped}
 		if action.Output != "" {
 			output := action.Output
 			item.Output = &output

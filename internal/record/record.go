@@ -57,6 +57,7 @@ type Start struct {
 	Key    string
 	Title  string
 	Link   string
+	Task   string
 }
 
 // Job is one flow's work on one pull request.
@@ -70,6 +71,8 @@ type Job struct {
 	Title     string
 	Link      string
 	Alert     string
+	Task      string
+	TaskID    int64
 	State     string
 	Verdict   string
 	CreatedAt time.Time
@@ -78,8 +81,11 @@ type Job struct {
 
 // Task is one task of a job, with the actions it ran.
 type Task struct {
+	ID       int64
 	N        int
 	Short    string
+	State    string
+	Head     string
 	At       string
 	Actions  []Action
 	PC       string
@@ -89,15 +95,16 @@ type Task struct {
 
 // Action is one step a task ran.
 type Action struct {
-	Type   string
-	Agent  string
-	Text   string
-	Path   string
-	Args   []string
-	Name   string
-	Value  string
-	Output string
-	Exit   *int
+	Type    string
+	Agent   string
+	Text    string
+	Path    string
+	Args    []string
+	Name    string
+	Value   string
+	Output  string
+	Exit    *int
+	Skipped bool
 }
 
 // Open opens or creates the SQLite record at path.
@@ -210,10 +217,10 @@ func (s *Store) FlowCounts(ctx context.Context) (map[string]int, error) {
 func (s *Store) EnsureJob(ctx context.Context, start Start) (*Job, bool, error) {
 	now := stamp(time.Now())
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs (flow, owner, repo, number, key, title, link, state, verdict, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO jobs (flow, owner, repo, number, key, title, link, task, state, verdict, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (flow, owner, repo, number) DO NOTHING`,
-		start.Flow, start.Owner, start.Repo, start.Number, start.Key, start.Title, start.Link,
+		start.Flow, start.Owner, start.Repo, start.Number, start.Key, start.Title, start.Link, start.Task,
 		StateStarted, VerdictPending, now, now)
 	if err != nil {
 		return nil, false, err
@@ -261,7 +268,7 @@ func (s *Store) SetAlert(ctx context.Context, owner, repo string, number int, me
 // Tasks returns a job's tasks in order, each with its actions.
 func (s *Store) Tasks(ctx context.Context, jobID int64) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, n, name, started_at, pc, evidence, tools FROM tasks WHERE job_id = ? ORDER BY n`, jobID)
+		`SELECT id, n, name, state, head, started_at, pc, evidence, tools FROM tasks WHERE job_id = ? ORDER BY n`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -273,11 +280,13 @@ func (s *Store) Tasks(ctx context.Context, jobID int64) ([]Task, error) {
 	for rows.Next() {
 		var id int64
 		var task Task
-		var at, pc, evidence, tools sql.NullString
-		if err := rows.Scan(&id, &task.N, &task.Short, &at, &pc, &evidence, &tools); err != nil {
+		var head, at, pc, evidence, tools sql.NullString
+		if err := rows.Scan(&id, &task.N, &task.Short, &task.State, &head, &at, &pc, &evidence, &tools); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		task.ID = id
+		task.Head = stringOf(head)
 		task.At = stringOf(at)
 		task.PC = stringOf(pc)
 		task.Evidence = stringOf(evidence)
@@ -304,7 +313,7 @@ func (s *Store) Tasks(ctx context.Context, jobID int64) ([]Task, error) {
 
 func (s *Store) actions(ctx context.Context, taskID int64) ([]Action, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT type, agent, text, path, args, name, value, output, exit
+		`SELECT type, agent, text, path, args, name, value, output, exit, skipped
 		 FROM actions WHERE task_id = ? ORDER BY ordinal`, taskID)
 	if err != nil {
 		return nil, err
@@ -315,7 +324,8 @@ func (s *Store) actions(ctx context.Context, taskID int64) ([]Action, error) {
 		var action Action
 		var agent, text, path, args, name, value, output sql.NullString
 		var exit sql.NullInt64
-		if err := rows.Scan(&action.Type, &agent, &text, &path, &args, &name, &value, &output, &exit); err != nil {
+		var skipped int
+		if err := rows.Scan(&action.Type, &agent, &text, &path, &args, &name, &value, &output, &exit, &skipped); err != nil {
 			return nil, err
 		}
 		action.Agent = stringOf(agent)
@@ -324,6 +334,7 @@ func (s *Store) actions(ctx context.Context, taskID int64) ([]Action, error) {
 		action.Name = stringOf(name)
 		action.Value = stringOf(value)
 		action.Output = stringOf(output)
+		action.Skipped = skipped == 1
 		if args.Valid && args.String != "" {
 			if err := json.Unmarshal([]byte(args.String), &action.Args); err != nil {
 				return nil, err
@@ -344,7 +355,7 @@ func (s *Store) queryJob(ctx context.Context, query string, args ...any) (*Job, 
 	var created, updated string
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key,
-		&job.Title, &job.Link, &alert, &job.State, &job.Verdict, &created, &updated)
+		&job.Title, &job.Link, &alert, &job.Task, &job.TaskID, &job.State, &job.Verdict, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -369,7 +380,7 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 		var created, updated string
 		if err := rows.Scan(
 			&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key,
-			&job.Title, &job.Link, &alert, &job.State, &job.Verdict, &created, &updated); err != nil {
+			&job.Title, &job.Link, &alert, &job.Task, &job.TaskID, &job.State, &job.Verdict, &created, &updated); err != nil {
 			return nil, err
 		}
 		job.Alert = alert.String
@@ -394,7 +405,7 @@ func stamp(t time.Time) string {
 }
 
 // jobFields is the column list every job read returns, in scan order.
-const jobFields = `id, flow, owner, repo, number, key, title, link, alert, state, verdict, created_at, updated_at`
+const jobFields = `id, flow, owner, repo, number, key, title, link, alert, task, task_id, state, verdict, created_at, updated_at`
 
 const jobColumns = `SELECT ` + jobFields + ` FROM jobs`
 
@@ -412,8 +423,12 @@ func (s *Store) migrate() error {
 		{"jobs", "title", `TEXT NOT NULL DEFAULT ''`},
 		{"jobs", "link", `TEXT NOT NULL DEFAULT ''`},
 		{"jobs", "alert", `TEXT`},
+		{"jobs", "task", `TEXT NOT NULL DEFAULT ''`},
+		{"jobs", "task_id", `INTEGER NOT NULL DEFAULT 0`},
 		{"tasks", "pc", `TEXT`},
 		{"tasks", "tools", `TEXT`},
+		{"tasks", "head", `TEXT`},
+		{"actions", "skipped", `INTEGER NOT NULL DEFAULT 0`},
 	}
 	for _, column := range columns {
 		if err := s.ensureColumn(column.table, column.name, column.decl); err != nil {
@@ -470,6 +485,8 @@ var schema = []string{
 		title TEXT NOT NULL DEFAULT '',
 		link TEXT NOT NULL DEFAULT '',
 		alert TEXT,
+		task TEXT NOT NULL DEFAULT '',
+		task_id INTEGER NOT NULL DEFAULT 0,
 		state TEXT NOT NULL,
 		verdict TEXT NOT NULL,
 		created_at TEXT NOT NULL,
@@ -485,6 +502,7 @@ var schema = []string{
 		pc TEXT,
 		evidence TEXT,
 		tools TEXT,
+		head TEXT,
 		started_at TEXT,
 		ended_at TEXT,
 		UNIQUE (job_id, n)
@@ -502,6 +520,7 @@ var schema = []string{
 		value TEXT,
 		output TEXT,
 		exit INTEGER,
+		skipped INTEGER NOT NULL DEFAULT 0,
 		started_at TEXT,
 		ended_at TEXT,
 		UNIQUE (task_id, ordinal)

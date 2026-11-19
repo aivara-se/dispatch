@@ -155,6 +155,13 @@ func TestLoadRefusesInvalidConfiguration(t *testing.T) {
 			file:     "review.json",
 			key:      "key",
 		},
+		{
+			name:     "key has no number",
+			dispatch: goodDispatch,
+			flow:     strings.Replace(goodFlow, `"key": "{n}"`, `"key": "verify"`, 1),
+			file:     "review.json",
+			key:      "key",
+		},
 	}
 
 	for _, tc := range cases {

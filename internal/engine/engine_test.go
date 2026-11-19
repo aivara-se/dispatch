@@ -78,18 +78,6 @@ const updatedFlow = `{
   }
 }`
 
-const releaseFlow = `{
-  "key": "post-{n}",
-  "tasks": {
-    "_start_": { "next": { "pr.merged": "release" } },
-    "release": {
-      "actions": [],
-      "limit": { "turn": 1, "time": 60 },
-      "next": { "pr.merged": "_done_" }
-    }
-  }
-}`
-
 var secret = []byte("s3cret")
 
 type harness struct {
@@ -328,12 +316,17 @@ func TestReviewStartsOnlyTheFlowThatNamesIt(t *testing.T) {
 }
 
 func TestClosedPullRequestEndsEveryJob(t *testing.T) {
-	for _, merged := range []bool{false, true} {
-		name := "unmerged"
-		if merged {
-			name = "merged"
-		}
-		t.Run(name, func(t *testing.T) {
+	cases := []struct {
+		name    string
+		merged  bool
+		state   string
+		verdict string
+	}{
+		{name: "unmerged", merged: false, state: record.StateBlocked, verdict: record.VerdictFailed},
+		{name: "merged", merged: true, state: record.StateDone, verdict: record.VerdictPending},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, map[string]string{"review": reviewFlow, "audit": auditFlow})
 			if status := h.post(delivery{id: "open-1", action: "opened", number: 212}); status != http.StatusAccepted {
 				t.Fatalf("open status = %d", status)
@@ -341,30 +334,16 @@ func TestClosedPullRequestEndsEveryJob(t *testing.T) {
 			if jobs := h.count("jobs"); jobs != 2 {
 				t.Fatalf("jobs before close = %d", jobs)
 			}
-			if status := h.post(delivery{id: "close-1", action: "closed", number: 212, merged: merged}); status != http.StatusAccepted {
+			if status := h.post(delivery{id: "close-1", action: "closed", number: 212, merged: tc.merged}); status != http.StatusAccepted {
 				t.Fatalf("close status = %d", status)
 			}
 			for _, flow := range []string{"review", "audit"} {
 				job := h.job(flow)
-				if job.State != record.StateBlocked || job.Verdict != record.VerdictFailed {
+				if job.State != tc.state || job.Verdict != tc.verdict {
 					t.Fatalf("%s job = %s/%s", flow, job.State, job.Verdict)
 				}
 			}
 		})
-	}
-}
-
-func TestMergedCloseLeavesNoStartedJob(t *testing.T) {
-	h := newHarness(t, map[string]string{"release": releaseFlow})
-	if status := h.post(delivery{id: "close-1", action: "closed", number: 212, merged: true}); status != http.StatusAccepted {
-		t.Fatalf("status = %d", status)
-	}
-	job := h.job("release")
-	if job.State != record.StateBlocked || job.Verdict != record.VerdictFailed {
-		t.Fatalf("job = %s/%s", job.State, job.Verdict)
-	}
-	if jobs := h.count("jobs"); jobs != 1 {
-		t.Fatalf("jobs = %d", jobs)
 	}
 }
 

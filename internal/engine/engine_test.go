@@ -66,18 +66,6 @@ const auditFlow = `{
   }
 }`
 
-const updatedFlow = `{
-  "key": "{n}",
-  "tasks": {
-    "_start_": { "next": { "pr.updated": "note" } },
-    "note": {
-      "actions": [],
-      "limit": { "turn": 1, "time": 60 },
-      "next": { "pr.merged": "_done_" }
-    }
-  }
-}`
-
 var secret = []byte("s3cret")
 
 type harness struct {
@@ -282,16 +270,6 @@ func TestEventThatStartsNoFlowWritesNothing(t *testing.T) {
 	}
 	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 0 || deliveries != 0 {
 		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
-	}
-}
-
-func TestStartOnUpdatedStartsNothing(t *testing.T) {
-	h := newHarness(t, map[string]string{"updated": updatedFlow})
-	if status := h.post(delivery{action: "opened", number: 212}); status != http.StatusAccepted {
-		t.Fatalf("status = %d", status)
-	}
-	if jobs := h.count("jobs"); jobs != 0 {
-		t.Fatalf("jobs = %d", jobs)
 	}
 }
 

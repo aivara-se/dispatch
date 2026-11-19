@@ -79,6 +79,11 @@ type Job struct {
 	UpdatedAt time.Time
 }
 
+// Identity is the job's path: flow/owner/repo/key.
+func (j Job) Identity() string {
+	return j.Flow + "/" + j.Owner + "/" + j.Repo + "/" + j.Key
+}
+
 // Task is one task of a job, with the actions it ran.
 type Task struct {
 	ID       int64

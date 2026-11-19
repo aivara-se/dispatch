@@ -292,7 +292,7 @@ func (r *Runner) action(ctx context.Context, job record.Job, action config.Actio
 			return "", 1, "", fmt.Errorf("agent %q is not configured", action.Agent)
 		}
 		text := strings.ReplaceAll(action.Text, "{pr.url}", job.Link)
-		result, err := r.launch.Run(ctx, profile, text, job.Key)
+		result, err := r.launch.Run(ctx, profile, text, job.Identity())
 		if err != nil {
 			return result.Output, result.Exit, result.Tools, err
 		}
@@ -359,7 +359,8 @@ func (r *Runner) stop(ctx context.Context, job record.Job, alert string) {
 	job.Alert = alert
 	r.store.SetJobAlert(ctx, job.ID, alert)
 	if err := r.labels.Block(ctx, job.Owner, job.Repo, job.Number); err != nil {
-		r.store.SetJobAlert(ctx, job.ID, "blocked label: "+err.Error())
+		job.Alert = alert + "; blocked label: " + err.Error()
+		r.store.SetJobAlert(ctx, job.ID, job.Alert)
 	}
 	if err := r.store.EndJob(ctx, job.ID, record.StateBlocked, record.VerdictFailed); err != nil {
 		return

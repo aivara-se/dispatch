@@ -40,6 +40,13 @@ func TestEnsureJobCreatesOneJob(t *testing.T) {
 	}
 }
 
+func TestIdentity(t *testing.T) {
+	job := record.Job{Flow: "review", Owner: "aivara-se", Repo: "dispatch", Key: "212"}
+	if got := job.Identity(); got != "review/aivara-se/dispatch/212" {
+		t.Fatalf("identity = %q", got)
+	}
+}
+
 func TestEndJobs(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {

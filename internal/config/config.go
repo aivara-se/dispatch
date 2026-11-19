@@ -33,6 +33,14 @@ var conditions = map[string]bool{
 	ConditionMerged:   true,
 }
 
+// starts are the conditions a delivery proves, so they are the only keys
+// _start_.next may name. pr.updated and pr.merged are read after a task.
+var starts = map[string]bool{
+	ConditionCreated:  true,
+	ConditionApproved: true,
+	ConditionRejected: true,
+}
+
 // ValidCondition reports whether name is one of the five conditions.
 func ValidCondition(name string) bool {
 	return conditions[name]
@@ -256,8 +264,8 @@ func loadFlow(path string, cfg *Config) (Flow, error) {
 		return Flow{}, err
 	}
 	for _, c := range flow.Start {
-		if c.Key == ConditionMerged {
-			return Flow{}, keyError(path, "tasks._start_.next."+c.Key, "a close ends the job it would start")
+		if !starts[c.Key] {
+			return Flow{}, keyError(path, "tasks._start_.next."+c.Key, "no delivery proves this condition")
 		}
 	}
 	for _, name := range names {

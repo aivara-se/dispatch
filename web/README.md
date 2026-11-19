@@ -3,8 +3,11 @@
 The SvelteKit client of the record. It reads the socket on the server; the
 browser talks only to this app. There is no write path.
 
+From the repository root:
+
 ```sh
 bun install
+cd web
 bun run build
 DISPATCH_SOCKET=~/.dispatch/dispatch.sock node build
 ```

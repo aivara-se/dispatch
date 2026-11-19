@@ -1,13 +1,23 @@
 <script lang="ts">
-  import { age } from '$lib/age'
+  import { age, hhmm } from '$lib/age'
+  import type { Action } from '$lib/types'
+  import { pick } from '$lib/selection'
 
   let { data } = $props()
 
   let job = $derived(data.job)
   let failing = $derived(job.tasks.length > 0 ? job.tasks[job.tasks.length - 1].n : null)
-  let picked = $state<number | null>(null)
-  let current = $derived(picked ?? failing)
+  let id = $derived(`${job.flow}/${job.owner}/${job.repo}/${job.key}`)
+  let picked = $state<{ id: string; n: number } | null>(null)
+  let current = $derived(pick(picked, id, failing))
   let task = $derived(job.tasks.find((item) => item.n === current))
+
+  const carried = (action: Action) =>
+    action.type === 'script'
+      ? [action.path, ...(action.args ?? [])].join(' ')
+      : action.type === 'action'
+        ? [action.name, action.value].filter(Boolean).join(' ')
+        : (action.text ?? '')
 </script>
 
 <svelte:head>
@@ -39,11 +49,11 @@
         class:current={item.n === current}
         class:failing={item.n === failing && job.state === 'blocked'}
         aria-current={item.n === current}
-        onclick={() => (picked = item.n)}
+        onclick={() => (picked = { id, n: item.n })}
       >
         <span class="n">{item.n}</span>
         <span class="short">{item.short}</span>
-        <span class="at">{item.at}{#if item.n === failing && job.state === 'blocked'} · <span class="failed">failed</span>{/if}</span>
+        <span class="at">{hhmm(item.at)}{#if item.n === failing && job.state === 'blocked'} · <span class="failed">failed</span>{/if}</span>
       </button>
     {/each}
   </nav>
@@ -60,6 +70,9 @@
                 {action.exit === null ? 'not run' : action.exit === 0 ? 'exit 0' : `failed · exit ${action.exit}`}
               </span>
             </div>
+            {#if carried(action)}
+              <p class="carried" class:mono={action.type !== 'prompt'}>{carried(action)}</p>
+            {/if}
             {#if action.skipped}
               <p class="skipped">skipped</p>
             {:else if action.output}

@@ -14,8 +14,8 @@ DISPATCH_WEBHOOK_SECRET=... ./dispatch --config config
 The web client reads that socket on the server:
 
 ```sh
-cd web
 bun install
+cd web
 bun run build
 node build
 ```

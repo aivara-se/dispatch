@@ -9,7 +9,7 @@ go build ./cmd/dispatch
 DISPATCH_WEBHOOK_SECRET=... ./dispatch --config config
 ```
 
-`--db` names the record, by default `~/.dispatch/dispatch.db`. The secret is read from the environment variable `config/dispatch.json` names.
+`--db` names the record (default `~/.dispatch/dispatch.db`); `--socket` names the API socket (default `~/.dispatch/dispatch.sock`). The secret is read from the environment variable `secret_name` names; the App key is the file `key_path` names.
 
 ## Use it
 

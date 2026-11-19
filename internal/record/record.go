@@ -5,6 +5,7 @@ package record
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -47,6 +48,17 @@ type Delivery struct {
 	Number int
 }
 
+// Start is the job a flow starts on a delivery.
+type Start struct {
+	Flow   string
+	Owner  string
+	Repo   string
+	Number int
+	Key    string
+	Title  string
+	Link   string
+}
+
 // Job is one flow's work on one pull request.
 type Job struct {
 	ID        int64
@@ -55,10 +67,37 @@ type Job struct {
 	Repo      string
 	Number    int
 	Key       string
+	Title     string
+	Link      string
+	Alert     string
 	State     string
 	Verdict   string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// Task is one task of a job, with the actions it ran.
+type Task struct {
+	N        int
+	Short    string
+	At       string
+	Actions  []Action
+	PC       string
+	Evidence string
+	Tools    string
+}
+
+// Action is one step a task ran.
+type Action struct {
+	Type   string
+	Agent  string
+	Text   string
+	Path   string
+	Args   []string
+	Name   string
+	Value  string
+	Output string
+	Exit   *int
 }
 
 // Open opens or creates the SQLite record at path.
@@ -80,13 +119,12 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	for _, statement := range schema {
-		if _, err := db.Exec(statement); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("record: %w", err)
-		}
+	store := &Store{db: db}
+	if err := store.migrate(); err != nil {
+		db.Close()
+		return nil, err
 	}
-	return &Store{db: db}, nil
+	return store, nil
 }
 
 // Close closes the record.
@@ -118,21 +156,65 @@ func (s *Store) RecordDelivery(ctx context.Context, d Delivery) error {
 
 // Job returns the job for a flow, repository and pull request number.
 func (s *Store) Job(ctx context.Context, flow, owner, repo string, number int) (*Job, error) {
-	return s.queryJob(ctx,
-		`SELECT id, flow, owner, repo, number, key, state, verdict, created_at, updated_at
-		 FROM jobs WHERE flow = ? AND owner = ? AND repo = ? AND number = ?`,
+	return s.queryJob(ctx, jobColumns+` WHERE flow = ? AND owner = ? AND repo = ? AND number = ?`,
 		flow, owner, repo, number)
+}
+
+// JobByKey returns the job a key names within a flow and repository.
+func (s *Store) JobByKey(ctx context.Context, flow, owner, repo, key string) (*Job, error) {
+	return s.queryJob(ctx, jobColumns+` WHERE flow = ? AND owner = ? AND repo = ? AND key = ?`,
+		flow, owner, repo, key)
+}
+
+// Jobs returns the jobs of one flow, most recently changed first.
+func (s *Store) Jobs(ctx context.Context, flow string) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, jobColumns+` WHERE flow = ? ORDER BY updated_at DESC, id DESC`, flow)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanJobs(rows)
+}
+
+// AllJobs returns every job, most recently changed first.
+func (s *Store) AllJobs(ctx context.Context) ([]Job, error) {
+	rows, err := s.db.QueryContext(ctx, jobColumns+` ORDER BY updated_at DESC, id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanJobs(rows)
+}
+
+// FlowCounts returns the number of jobs per flow.
+func (s *Store) FlowCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT flow, COUNT(*) FROM jobs GROUP BY flow`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[string]int{}
+	for rows.Next() {
+		var flow string
+		var count int
+		if err := rows.Scan(&flow, &count); err != nil {
+			return nil, err
+		}
+		counts[flow] = count
+	}
+	return counts, rows.Err()
 }
 
 // EnsureJob returns the job for a flow, repository and pull request number,
 // and creates it with the generated key when it is absent.
-func (s *Store) EnsureJob(ctx context.Context, flow, owner, repo string, number int, key string) (*Job, bool, error) {
+func (s *Store) EnsureJob(ctx context.Context, start Start) (*Job, bool, error) {
 	now := stamp(time.Now())
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs (flow, owner, repo, number, key, state, verdict, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO jobs (flow, owner, repo, number, key, title, link, state, verdict, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (flow, owner, repo, number) DO NOTHING`,
-		flow, owner, repo, number, key, StateStarted, VerdictPending, now, now)
+		start.Flow, start.Owner, start.Repo, start.Number, start.Key, start.Title, start.Link,
+		StateStarted, VerdictPending, now, now)
 	if err != nil {
 		return nil, false, err
 	}
@@ -140,7 +222,7 @@ func (s *Store) EnsureJob(ctx context.Context, flow, owner, repo string, number 
 	if err != nil {
 		return nil, false, err
 	}
-	job, err := s.Job(ctx, flow, owner, repo, number)
+	job, err := s.Job(ctx, start.Flow, start.Owner, start.Repo, start.Number)
 	if err != nil {
 		return nil, false, err
 	}
@@ -150,34 +232,126 @@ func (s *Store) EnsureJob(ctx context.Context, flow, owner, repo string, number 
 // EndJobs ends every started job for a pull request: done and pending when it
 // merged, blocked and failed when it closed unmerged (docs/adrs/008). A job
 // that ends here did not reach _done_, so no close writes passed
-// (docs/adrs/003). It returns how many jobs it ended.
-func (s *Store) EndJobs(ctx context.Context, owner, repo string, number int, merged bool) (int64, error) {
+// (docs/adrs/003). It returns the jobs it ended.
+func (s *Store) EndJobs(ctx context.Context, owner, repo string, number int, merged bool) ([]Job, error) {
 	state, verdict := StateBlocked, VerdictFailed
 	if merged {
 		state, verdict = StateDone, VerdictPending
 	}
-	res, err := s.db.ExecContext(ctx,
+	rows, err := s.db.QueryContext(ctx,
 		`UPDATE jobs SET state = ?, verdict = ?, updated_at = ?
-		 WHERE owner = ? AND repo = ? AND number = ? AND state = ?`,
+		 WHERE owner = ? AND repo = ? AND number = ? AND state = ?
+		 RETURNING `+jobFields,
 		state, verdict, stamp(time.Now()), owner, repo, number, StateStarted)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return res.RowsAffected()
+	defer rows.Close()
+	return scanJobs(rows)
+}
+
+// SetAlert records a message on every job for a pull request.
+func (s *Store) SetAlert(ctx context.Context, owner, repo string, number int, message string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE jobs SET alert = ?, updated_at = ? WHERE owner = ? AND repo = ? AND number = ?`,
+		message, stamp(time.Now()), owner, repo, number)
+	return err
+}
+
+// Tasks returns a job's tasks in order, each with its actions.
+func (s *Store) Tasks(ctx context.Context, jobID int64) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, n, name, started_at, pc, evidence, tools FROM tasks WHERE job_id = ? ORDER BY n`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	type row struct {
+		id   int64
+		task Task
+	}
+	var rowsOut []row
+	for rows.Next() {
+		var id int64
+		var task Task
+		var at, pc, evidence, tools sql.NullString
+		if err := rows.Scan(&id, &task.N, &task.Short, &at, &pc, &evidence, &tools); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		task.At = stringOf(at)
+		task.PC = stringOf(pc)
+		task.Evidence = stringOf(evidence)
+		task.Tools = stringOf(tools)
+		rowsOut = append(rowsOut, row{id: id, task: task})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	tasks := make([]Task, 0, len(rowsOut))
+	for _, item := range rowsOut {
+		actions, err := s.actions(ctx, item.id)
+		if err != nil {
+			return nil, err
+		}
+		item.task.Actions = actions
+		tasks = append(tasks, item.task)
+	}
+	return tasks, nil
+}
+
+func (s *Store) actions(ctx context.Context, taskID int64) ([]Action, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT type, agent, text, path, args, name, value, output, exit
+		 FROM actions WHERE task_id = ? ORDER BY ordinal`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var actions []Action
+	for rows.Next() {
+		var action Action
+		var agent, text, path, args, name, value, output sql.NullString
+		var exit sql.NullInt64
+		if err := rows.Scan(&action.Type, &agent, &text, &path, &args, &name, &value, &output, &exit); err != nil {
+			return nil, err
+		}
+		action.Agent = stringOf(agent)
+		action.Text = stringOf(text)
+		action.Path = stringOf(path)
+		action.Name = stringOf(name)
+		action.Value = stringOf(value)
+		action.Output = stringOf(output)
+		if args.Valid && args.String != "" {
+			if err := json.Unmarshal([]byte(args.String), &action.Args); err != nil {
+				return nil, err
+			}
+		}
+		if exit.Valid {
+			value := int(exit.Int64)
+			action.Exit = &value
+		}
+		actions = append(actions, action)
+	}
+	return actions, rows.Err()
 }
 
 func (s *Store) queryJob(ctx context.Context, query string, args ...any) (*Job, error) {
 	var job Job
+	var alert sql.NullString
 	var created, updated string
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key,
-		&job.State, &job.Verdict, &created, &updated)
+		&job.Title, &job.Link, &alert, &job.State, &job.Verdict, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	job.Alert = alert.String
 	if job.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
 		return nil, err
 	}
@@ -187,8 +361,93 @@ func (s *Store) queryJob(ctx context.Context, query string, args ...any) (*Job, 
 	return &job, nil
 }
 
+func scanJobs(rows *sql.Rows) ([]Job, error) {
+	var jobs []Job
+	for rows.Next() {
+		var job Job
+		var alert sql.NullString
+		var created, updated string
+		if err := rows.Scan(
+			&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key,
+			&job.Title, &job.Link, &alert, &job.State, &job.Verdict, &created, &updated); err != nil {
+			return nil, err
+		}
+		job.Alert = alert.String
+		var err error
+		if job.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+			return nil, err
+		}
+		if job.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func stringOf(value sql.NullString) string {
+	return value.String
+}
+
 func stamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// jobFields is the column list every job read returns, in scan order.
+const jobFields = `id, flow, owner, repo, number, key, title, link, alert, state, verdict, created_at, updated_at`
+
+const jobColumns = `SELECT ` + jobFields + ` FROM jobs`
+
+func (s *Store) migrate() error {
+	for _, statement := range schema {
+		if _, err := s.db.Exec(statement); err != nil {
+			return fmt.Errorf("record: %w", err)
+		}
+	}
+	columns := []struct {
+		table string
+		name  string
+		decl  string
+	}{
+		{"jobs", "title", `TEXT NOT NULL DEFAULT ''`},
+		{"jobs", "link", `TEXT NOT NULL DEFAULT ''`},
+		{"jobs", "alert", `TEXT`},
+		{"tasks", "pc", `TEXT`},
+		{"tasks", "tools", `TEXT`},
+	}
+	for _, column := range columns {
+		if err := s.ensureColumn(column.table, column.name, column.decl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(table, name, decl string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var column, kind string
+		var notNull, primary int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &column, &kind, &notNull, &dflt, &primary); err != nil {
+			rows.Close()
+			return err
+		}
+		if column == name {
+			found = true
+		}
+	}
+	rows.Close()
+	if found {
+		return nil
+	}
+	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + decl)
+	return err
 }
 
 var schema = []string{
@@ -208,6 +467,9 @@ var schema = []string{
 		repo TEXT NOT NULL,
 		number INTEGER NOT NULL,
 		key TEXT NOT NULL,
+		title TEXT NOT NULL DEFAULT '',
+		link TEXT NOT NULL DEFAULT '',
+		alert TEXT,
 		state TEXT NOT NULL,
 		verdict TEXT NOT NULL,
 		created_at TEXT NOT NULL,
@@ -220,7 +482,9 @@ var schema = []string{
 		name TEXT NOT NULL,
 		n INTEGER NOT NULL,
 		state TEXT NOT NULL,
+		pc TEXT,
 		evidence TEXT,
+		tools TEXT,
 		started_at TEXT,
 		ended_at TEXT,
 		UNIQUE (job_id, n)

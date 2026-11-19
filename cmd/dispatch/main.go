@@ -1,4 +1,4 @@
-// Command dispatch runs the engine's webhook server.
+// Command dispatch runs the engine's webhook server and its record API.
 package main
 
 import (
@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,8 +15,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aivara-se/dispatch/internal/api"
 	"github.com/aivara-se/dispatch/internal/config"
 	"github.com/aivara-se/dispatch/internal/engine"
+	"github.com/aivara-se/dispatch/internal/github"
 	"github.com/aivara-se/dispatch/internal/record"
 	"github.com/aivara-se/dispatch/internal/webhook"
 )
@@ -31,16 +34,20 @@ func run(args []string) error {
 	flags := flag.NewFlagSet("dispatch", flag.ContinueOnError)
 	configDir := flags.String("config", "config", "directory holding dispatch.json and flows/")
 	dbPath := flags.String("db", "", "path to the SQLite record (default ~/.dispatch/dispatch.db)")
+	socketPath := flags.String("socket", "", "path to the API socket (default ~/.dispatch/dispatch.sock)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
 	if *dbPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
 		*dbPath = filepath.Join(home, ".dispatch", "dispatch.db")
+	}
+	if *socketPath == "" {
+		*socketPath = filepath.Join(home, ".dispatch", "dispatch.sock")
 	}
 
 	cfg, flows, err := config.Load(*configDir)
@@ -51,6 +58,14 @@ func run(args []string) error {
 	if !ok || secret == "" {
 		return fmt.Errorf("%s: not set", cfg.SecretName)
 	}
+	keyPEM, err := os.ReadFile(cfg.KeyPath)
+	if err != nil {
+		return fmt.Errorf("key_path: %w", err)
+	}
+	app, err := github.New(cfg.AppID, keyPEM, "", nil)
+	if err != nil {
+		return err
+	}
 
 	store, err := record.Open(*dbPath)
 	if err != nil {
@@ -58,34 +73,68 @@ func run(args []string) error {
 	}
 	defer store.Close()
 
-	handler := webhook.NewHandler([]byte(secret), engine.New(store, cfg.Repos, flows).Deliver)
-	mux := http.NewServeMux()
-	mux.Handle(cfg.Path, handler)
-	server := &http.Server{
+	names := make([]string, 0, len(flows))
+	for _, flow := range flows {
+		names = append(names, flow.Name)
+	}
+	hub := api.NewHub()
+	handler := webhook.NewHandler([]byte(secret), engine.New(store, cfg.Repos, flows, app, hub.Publish).Deliver)
+
+	webhookServer := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           mux,
+		Handler:           pathHandler(cfg.Path, handler),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	if err := os.MkdirAll(filepath.Dir(*socketPath), 0o700); err != nil {
+		return err
+	}
+	if _, err := net.DialTimeout("unix", *socketPath, 200*time.Millisecond); err == nil {
+		return fmt.Errorf("socket %s is in use", *socketPath)
+	}
+	if err := os.Remove(*socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	listener, err := net.Listen("unix", *socketPath)
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(*socketPath, 0o600); err != nil {
+		listener.Close()
+		return err
+	}
+	apiServer := &http.Server{Handler: api.New(store, names, hub).Handler()}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	served := make(chan error, 1)
+	served := make(chan error, 2)
 	go func() {
 		log.Printf("dispatch: listening on %s%s", cfg.Listen, cfg.Path)
-		served <- server.ListenAndServe()
+		served <- webhookServer.ListenAndServe()
+	}()
+	go func() {
+		log.Printf("dispatch: serving %s", *socketPath)
+		served <- apiServer.Serve(listener)
 	}()
 
 	select {
 	case err := <-served:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
 		}
-		return err
 	case <-ctx.Done():
 	}
 
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return server.Shutdown(shutdown)
+	if err := apiServer.Shutdown(shutdown); err != nil {
+		return err
+	}
+	return webhookServer.Shutdown(shutdown)
+}
+
+func pathHandler(path string, handler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle(path, handler)
+	return mux
 }

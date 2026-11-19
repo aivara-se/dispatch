@@ -14,6 +14,8 @@ const goodDispatch = `{
   "listen": "127.0.0.1:8645",
   "path": "/github",
   "secret_name": "DISPATCH_WEBHOOK_SECRET",
+  "app_id": 123456,
+  "key_path": "/tmp/app.pem",
   "repos": ["aivara-se/*"],
   "hermes": "/usr/local/bin/hermes",
   "agents": { "memo": { "profile": "memo" } }
@@ -45,6 +47,9 @@ func TestLoadAcceptsTheExample(t *testing.T) {
 	}
 	if cfg.Listen != "127.0.0.1:8645" || cfg.Path != "/github" || cfg.SecretName != "DISPATCH_WEBHOOK_SECRET" {
 		t.Fatalf("server fields = %q %q %q", cfg.Listen, cfg.Path, cfg.SecretName)
+	}
+	if cfg.AppID != 123456 || cfg.KeyPath != "/root/.dispatch/app.pem" {
+		t.Fatalf("app = %d %q", cfg.AppID, cfg.KeyPath)
 	}
 	if len(flows) != 1 || flows[0].Name != "review" {
 		t.Fatalf("flows = %+v", flows)
@@ -177,6 +182,33 @@ func TestLoadRefusesNonAbsoluteHermes(t *testing.T) {
 	_, _, err := load(t, dispatch, map[string]string{"review": goodFlow})
 	if err == nil || !strings.Contains(err.Error(), "hermes") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadRefusesMissingApp(t *testing.T) {
+	cases := []struct {
+		name     string
+		dispatch string
+		key      string
+	}{
+		{
+			name:     "missing app id",
+			dispatch: strings.Replace(goodDispatch, "  \"app_id\": 123456,\n", "", 1),
+			key:      "app_id",
+		},
+		{
+			name:     "missing key path",
+			dispatch: strings.Replace(goodDispatch, "  \"key_path\": \"/tmp/app.pem\",\n", "", 1),
+			key:      "key_path",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := load(t, tc.dispatch, map[string]string{"review": goodFlow})
+			if err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("error = %v", err)
+			}
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package record_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -13,7 +14,7 @@ func TestEnsureJobCreatesOneJob(t *testing.T) {
 	ctx := context.Background()
 	store := open(t)
 
-	job, created, err := store.EnsureJob(ctx, "review", "aivara-se", "dispatch", 212, "212")
+	job, created, err := store.EnsureJob(ctx, start("review", 212, "212"))
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -24,7 +25,7 @@ func TestEnsureJobCreatesOneJob(t *testing.T) {
 		t.Fatalf("job = %+v", job)
 	}
 
-	again, created, err := store.EnsureJob(ctx, "review", "aivara-se", "dispatch", 212, "changed")
+	again, created, err := store.EnsureJob(ctx, start("review", 212, "changed"))
 	if err != nil {
 		t.Fatalf("ensure again: %v", err)
 	}
@@ -53,15 +54,15 @@ func TestEndJobs(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			store := open(t)
-			if _, _, err := store.EnsureJob(ctx, "review", "aivara-se", "dispatch", 7, "7"); err != nil {
+			if _, _, err := store.EnsureJob(ctx, start("review", 7, "7")); err != nil {
 				t.Fatal(err)
 			}
 			ended, err := store.EndJobs(ctx, "aivara-se", "dispatch", 7, tc.merged)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ended != 1 {
-				t.Fatalf("ended = %d", ended)
+			if len(ended) != 1 {
+				t.Fatalf("ended = %d", len(ended))
 			}
 			job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7)
 			if err != nil {
@@ -74,8 +75,8 @@ func TestEndJobs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ended != 0 {
-				t.Fatalf("second end = %d", ended)
+			if len(ended) != 0 {
+				t.Fatalf("second end = %d", len(ended))
 			}
 		})
 	}
@@ -97,6 +98,45 @@ func TestRecordDeliveryKeepsOneID(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesAnM0Record(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE jobs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		flow TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+		key TEXT NOT NULL, state TEXT NOT NULL, verdict TEXT NOT NULL,
+		created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		UNIQUE (flow, owner, repo, number))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO jobs (flow, owner, repo, number, key, state, verdict, created_at, updated_at)
+		VALUES ('review', 'aivara-se', 'dispatch', 212, '212', 'started', 'pending',
+		'2026-11-19T00:00:00Z', '2026-11-19T00:00:00Z')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := record.Open(path)
+	if err != nil {
+		t.Fatalf("open an m0 record: %v", err)
+	}
+	defer store.Close()
+	job, err := store.Job(context.Background(), "review", "aivara-se", "dispatch", 212)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Key != "212" || job.Title != "" || job.Alert != "" {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
 func TestJobSurvivesReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dispatch.db")
@@ -104,7 +144,7 @@ func TestJobSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := first.EnsureJob(ctx, "review", "aivara-se", "dispatch", 9, "9"); err != nil {
+	if _, _, err := first.EnsureJob(ctx, start("review", 9, "9")); err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Close(); err != nil {
@@ -136,4 +176,8 @@ func open(t *testing.T) *record.Store {
 	}
 	t.Cleanup(func() { store.Close() })
 	return store
+}
+
+func start(flow string, number int, key string) record.Start {
+	return record.Start{Flow: flow, Owner: "aivara-se", Repo: "dispatch", Number: number, Key: key}
 }

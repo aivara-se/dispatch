@@ -14,18 +14,28 @@ import (
 	"github.com/aivara-se/dispatch/internal/webhook"
 )
 
-// Engine applies deliveries to the record.
-type Engine struct {
-	mu    sync.Mutex
-	store *record.Store
-	repos []string
-	flows []config.Flow
+// Labeler writes the blocked label for a pull request.
+type Labeler interface {
+	Block(ctx context.Context, owner, repo string, number int) error
 }
 
-// New returns an engine over one record, the served repositories and the
-// configured flows.
-func New(store *record.Store, repos []string, flows []config.Flow) *Engine {
-	return &Engine{store: store, repos: repos, flows: flows}
+// Publisher announces a job that changed.
+type Publisher func(flow, owner, repo, key string)
+
+// Engine applies deliveries to the record.
+type Engine struct {
+	mu      sync.Mutex
+	store   *record.Store
+	repos   []string
+	flows   []config.Flow
+	labeler Labeler
+	publish Publisher
+}
+
+// New returns an engine over one record, the served repositories, the
+// configured flows, the App's label writer and the stream's publisher.
+func New(store *record.Store, repos []string, flows []config.Flow, labeler Labeler, publish Publisher) *Engine {
+	return &Engine{store: store, repos: repos, flows: flows, labeler: labeler, publish: publish}
 }
 
 // Deliver applies one verified delivery. A delivery that is already kept, is
@@ -45,13 +55,17 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 		return err
 	}
 
+	var ended []record.Job
 	touched := false
 	if event.Kind == webhook.KindPullRequest && event.Action == "closed" {
-		ended, err := e.store.EndJobs(ctx, event.Owner, event.Repo, event.Number, event.Merged)
+		ended, err = e.store.EndJobs(ctx, event.Owner, event.Repo, event.Number, event.Merged)
 		if err != nil {
 			return err
 		}
-		touched = ended > 0
+		for _, job := range ended {
+			e.announce(job)
+		}
+		touched = len(ended) > 0
 	}
 
 	holds := holding(event)
@@ -59,17 +73,38 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 		if _, ok := startTarget(flow, holds); !ok {
 			continue
 		}
-		key := strings.ReplaceAll(flow.Key, "{n}", strconv.Itoa(event.Number))
-		if _, _, err := e.store.EnsureJob(ctx, flow.Name, event.Owner, event.Repo, event.Number, key); err != nil {
+		job, created, err := e.store.EnsureJob(ctx, record.Start{
+			Flow:   flow.Name,
+			Owner:  event.Owner,
+			Repo:   event.Repo,
+			Number: event.Number,
+			Key:    strings.ReplaceAll(flow.Key, "{n}", strconv.Itoa(event.Number)),
+			Title:  event.Title,
+			Link:   event.Link,
+		})
+		if err != nil {
 			return err
 		}
+		if created {
+			e.announce(*job)
+		}
 		touched = true
+	}
+
+	// A close writes the label the flow names. A rejected write is kept on the
+	// jobs as their alert, so the record shows it instead of a silent pass.
+	if len(ended) > 0 && !event.Merged {
+		if err := e.labeler.Block(ctx, event.Owner, event.Repo, event.Number); err != nil {
+			if err := e.store.SetAlert(ctx, event.Owner, event.Repo, event.Number, "blocked label: "+err.Error()); err != nil {
+				return err
+			}
+		}
 	}
 
 	if !touched {
 		return nil
 	}
-	return e.store.RecordDelivery(ctx, record.Delivery{
+	err = e.store.RecordDelivery(ctx, record.Delivery{
 		ID:     event.ID,
 		Kind:   event.Kind,
 		Action: event.Action,
@@ -77,6 +112,16 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 		Repo:   event.Repo,
 		Number: event.Number,
 	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *Engine) announce(job record.Job) {
+	if e.publish != nil {
+		e.publish(job.Flow, job.Owner, job.Repo, job.Key)
+	}
 }
 
 func (e *Engine) serves(owner, repo string) bool {

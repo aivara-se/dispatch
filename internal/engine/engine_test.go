@@ -3,20 +3,28 @@ package engine_test
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aivara-se/dispatch/internal/config"
 	"github.com/aivara-se/dispatch/internal/engine"
+	"github.com/aivara-se/dispatch/internal/github"
 	"github.com/aivara-se/dispatch/internal/record"
 	"github.com/aivara-se/dispatch/internal/webhook"
 )
@@ -25,6 +33,8 @@ const dispatchFile = `{
   "listen": "127.0.0.1:8645",
   "path": "/github",
   "secret_name": "DISPATCH_WEBHOOK_SECRET",
+  "app_id": 123456,
+  "key_path": "/tmp/app.pem",
   "repos": ["aivara-se/*"],
   "hermes": "/usr/local/bin/hermes",
   "agents": { "memo": { "profile": "memo" } }
@@ -69,13 +79,38 @@ const auditFlow = `{
 var secret = []byte("s3cret")
 
 type harness struct {
-	t      *testing.T
-	store  *record.Store
-	server *httptest.Server
-	dbPath string
+	t       *testing.T
+	store   *record.Store
+	server  *httptest.Server
+	dbPath  string
+	labeler engine.Labeler
+	stub    *stubLabeler
+	events  []string
+}
+
+type stubLabeler struct {
+	calls  int
+	err    error
+	owner  string
+	repo   string
+	number int
+}
+
+func (s *stubLabeler) Block(_ context.Context, owner, repo string, number int) error {
+	s.calls++
+	s.owner, s.repo, s.number = owner, repo, number
+	return s.err
 }
 
 func newHarness(t *testing.T, flows map[string]string) *harness {
+	t.Helper()
+	stub := &stubLabeler{}
+	h := newHarnessWith(t, flows, stub)
+	h.stub = stub
+	return h
+}
+
+func newHarnessWith(t *testing.T, flows map[string]string, labeler engine.Labeler) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "flows"), 0o755); err != nil {
@@ -100,14 +135,19 @@ func newHarness(t *testing.T, flows map[string]string) *harness {
 		t.Fatalf("open record: %v", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle(cfg.Path, webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded).Deliver))
+	h := &harness{t: t, store: store, dbPath: dbPath, labeler: labeler}
+	mux.Handle(cfg.Path, webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded, h.labeler, h.publish).Deliver))
 	server := httptest.NewServer(mux)
-	h := &harness{t: t, store: store, server: server, dbPath: dbPath}
+	h.server = server
 	t.Cleanup(func() {
 		server.Close()
 		store.Close()
 	})
 	return h
+}
+
+func (h *harness) publish(flow, owner, repo, key string) {
+	h.events = append(h.events, flow+"/"+owner+"/"+repo+"/"+key)
 }
 
 type delivery struct {
@@ -142,8 +182,10 @@ func (h *harness) post(d delivery) int {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 		PullRequest struct {
-			Number int  `json:"number"`
-			Merged bool `json:"merged"`
+			Number  int    `json:"number"`
+			Merged  bool   `json:"merged"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
 		} `json:"pull_request"`
 		Review *struct {
 			State string `json:"state"`
@@ -152,6 +194,8 @@ func (h *harness) post(d delivery) int {
 	payload.Repository.FullName = d.owner + "/" + d.repo
 	payload.PullRequest.Number = d.number
 	payload.PullRequest.Merged = d.merged
+	payload.PullRequest.Title = "a title"
+	payload.PullRequest.HTMLURL = "https://github.com/" + d.owner + "/" + d.repo + "/pull/" + strconv.Itoa(d.number)
 	if d.review != "" {
 		payload.Review = &struct {
 			State string `json:"state"`
@@ -213,8 +257,14 @@ func TestOpenedDeliveryStartsOneJob(t *testing.T) {
 	if job.State != record.StateStarted || job.Verdict != record.VerdictPending || job.Key != "212" {
 		t.Fatalf("job = %+v", job)
 	}
+	if job.Title != "a title" || job.Link != "https://github.com/aivara-se/dispatch/pull/212" {
+		t.Fatalf("job title = %q, link = %q", job.Title, job.Link)
+	}
 	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 1 || deliveries != 1 {
 		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+	if len(h.events) != 1 || h.events[0] != "review/aivara-se/dispatch/212" {
+		t.Fatalf("events = %v", h.events)
 	}
 }
 
@@ -321,7 +371,45 @@ func TestClosedPullRequestEndsEveryJob(t *testing.T) {
 					t.Fatalf("%s job = %s/%s", flow, job.State, job.Verdict)
 				}
 			}
+			wantCalls := 1
+			if tc.merged {
+				wantCalls = 0
+			}
+			if h.stub.calls != wantCalls {
+				t.Fatalf("label calls = %d, want %d", h.stub.calls, wantCalls)
+			}
+			if tc.merged {
+				if h.stub.owner != "" {
+					t.Fatalf("a merged close called the labeler for %s", h.stub.owner)
+				}
+			} else if h.stub.owner != "aivara-se" || h.stub.repo != "dispatch" || h.stub.number != 212 {
+				t.Fatalf("labeler call = %s/%s#%d", h.stub.owner, h.stub.repo, h.stub.number)
+			}
 		})
+	}
+}
+
+func TestRejectedLabelIsRecorded(t *testing.T) {
+	h := newHarness(t, map[string]string{"review": reviewFlow})
+	h.stub.err = errors.New("github: label aivara-se/dispatch#212: 403 Forbidden")
+	if status := h.post(delivery{id: "open-1", action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("open status = %d", status)
+	}
+	if status := h.post(delivery{id: "close-1", action: "closed", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("close status = %d", status)
+	}
+	job := h.job("review")
+	if job.State != record.StateBlocked || job.Verdict != record.VerdictFailed {
+		t.Fatalf("job = %s/%s", job.State, job.Verdict)
+	}
+	if !strings.HasPrefix(job.Alert, "blocked label: github: label aivara-se/dispatch#212: 403") {
+		t.Fatalf("alert = %q", job.Alert)
+	}
+	if h.stub.calls != 1 {
+		t.Fatalf("label calls = %d", h.stub.calls)
+	}
+	if deliveries := h.count("deliveries"); deliveries != 2 {
+		t.Fatalf("deliveries = %d", deliveries)
 	}
 }
 
@@ -361,6 +449,57 @@ func TestTwoFlowsStartTwoJobs(t *testing.T) {
 	if h.job("review").Key != "212" || h.job("audit").Key != "audit-212" {
 		t.Fatalf("keys = %q, %q", h.job("review").Key, h.job("audit").Key)
 	}
+}
+
+func TestUnmergedCloseLabelsThroughTheApp(t *testing.T) {
+	var labeled bool
+	var labelBody string
+	appServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/aivara-se/dispatch/installation":
+			w.Write([]byte(`{"id":9}`))
+		case "/app/installations/9/access_tokens":
+			w.Write([]byte(`{"token":"installation-token","expires_at":"` + time.Now().Add(time.Hour).Format(time.RFC3339) + `"}`))
+		case "/repos/aivara-se/dispatch/issues/212/labels":
+			labeled = true
+			body, _ := io.ReadAll(r.Body)
+			labelBody = string(body)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer appServer.Close()
+
+	app, err := github.New(123456, testKey(t), appServer.URL, appServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarnessWith(t, map[string]string{"review": reviewFlow}, app)
+	if status := h.post(delivery{id: "open-1", action: "opened", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("open status = %d", status)
+	}
+	if status := h.post(delivery{id: "close-1", action: "closed", number: 212}); status != http.StatusAccepted {
+		t.Fatalf("close status = %d", status)
+	}
+	if !labeled {
+		t.Fatal("the close wrote no label")
+	}
+	if labelBody != `{"labels":["blocked"]}` {
+		t.Fatalf("label body = %q", labelBody)
+	}
+	job := h.job("review")
+	if job.State != record.StateBlocked || job.Verdict != record.VerdictFailed || job.Alert != "" {
+		t.Fatalf("job = %s/%s alert=%q", job.State, job.Verdict, job.Alert)
+	}
+}
+
+func testKey(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 }
 
 func sign(key, body []byte) string {

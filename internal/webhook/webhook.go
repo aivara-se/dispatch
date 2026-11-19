@@ -40,6 +40,8 @@ type Event struct {
 	Number int
 	Merged bool
 	Review string
+	Title  string
+	Link   string
 }
 
 // Verify reports whether signature is the HMAC-SHA256 of body under secret.
@@ -75,8 +77,10 @@ func Parse(header http.Header, body []byte) (Event, error) {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 		PullRequest *struct {
-			Number int  `json:"number"`
-			Merged bool `json:"merged"`
+			Number  int    `json:"number"`
+			Merged  bool   `json:"merged"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
 		} `json:"pull_request"`
 		Review *struct {
 			State string `json:"state"`
@@ -100,6 +104,8 @@ func Parse(header http.Header, body []byte) (Event, error) {
 		Repo:   repo,
 		Number: payload.PullRequest.Number,
 		Merged: payload.PullRequest.Merged,
+		Title:  payload.PullRequest.Title,
+		Link:   payload.PullRequest.HTMLURL,
 	}
 	if payload.Review != nil {
 		event.Review = payload.Review.State

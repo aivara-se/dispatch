@@ -24,7 +24,7 @@ func TestEnsureJobCreatesOneJob(t *testing.T) {
 		t.Fatalf("job = %+v", job)
 	}
 
-	again, created, err := store.EnsureJob(ctx, "review", "aivara-se", "dispatch", 212, "212")
+	again, created, err := store.EnsureJob(ctx, "review", "aivara-se", "dispatch", 212, "changed")
 	if err != nil {
 		t.Fatalf("ensure again: %v", err)
 	}
@@ -33,6 +33,9 @@ func TestEnsureJobCreatesOneJob(t *testing.T) {
 	}
 	if again.ID != job.ID {
 		t.Fatalf("ids = %d and %d", job.ID, again.ID)
+	}
+	if again.Key != "212" {
+		t.Fatalf("stored key = %q, want the first write", again.Key)
 	}
 }
 

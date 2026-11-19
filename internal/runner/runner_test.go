@@ -325,6 +325,49 @@ func TestResumeSkipsFinishedActions(t *testing.T) {
 	}
 }
 
+func TestACrashBeforeAnActionFinishesResumesOnResume(t *testing.T) {
+	// BeginAction wrote the row and the crash came before FinishAction. The
+	// resumed job runs the action on that row, so the job still ends done and
+	// the record keeps one row with the output.
+	store, job, r, launch, _ := newHarness(t, "single", "run", "single-212", &conditions{
+		head:  "s1",
+		holds: map[string]bool{"pr.approved": true},
+	})
+	begun, err := store.BeginTask(context.Background(), job.ID, "run", "s0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginAction(context.Background(), begun.ID, 0, record.Action{Type: "prompt", Agent: "memo", Text: "Go."}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTaskID(context.Background(), job.ID, begun.ID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.Start(*reloaded)
+	ended := wait(t, store, "single")
+	if ended.State != record.StateDone || ended.Verdict != record.VerdictPassed {
+		t.Fatalf("job = %s/%s, alert %q", ended.State, ended.Verdict, ended.Alert)
+	}
+	if launch.count() != 1 {
+		t.Fatalf("the pending action ran %d times", launch.count())
+	}
+	tasks, _ := store.Tasks(context.Background(), job.ID)
+	if len(tasks) != 1 || tasks[0].State != record.TaskDone {
+		t.Fatalf("tasks = %+v", tasks)
+	}
+	if len(tasks[0].Actions) != 1 {
+		t.Fatalf("actions = %+v", tasks[0].Actions)
+	}
+	if exit := tasks[0].Actions[0].Exit; exit == nil || *exit != 0 {
+		t.Fatalf("action exit = %v", exit)
+	}
+}
+
 func TestKillStopsTheAction(t *testing.T) {
 	store, job, r, launch, _ := newHarness(t, "single", "run", "single-212", &conditions{head: "s1"})
 	launch.block = true

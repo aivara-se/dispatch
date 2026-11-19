@@ -16,7 +16,7 @@ This directory is an example; a deployment brings its own. The `review` flow her
 `flows/<name>.json`
 
 - The file name is the flow name. `review` is an example; flows belong to the deployment, not to Dispatch.
-- `key` — the job's last path segment; `{n}` is the pull request number.
+- `key` — the job's last path segment; it must contain `{n}`, the pull request number, so two pull requests cannot share one.
 - `tasks` — `_start_` and one entry per task.
 - `_start_.next` — the delivery that starts a job.
 - A task has `actions`, a `limit`, and `next`. `limit.turn` is how many times the task may run in one job; `limit.time` is the task's whole budget, in seconds, and the engine kills a running action when it runs out. `_start_` is special: it has only `next`.

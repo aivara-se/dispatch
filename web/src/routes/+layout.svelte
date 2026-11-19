@@ -4,6 +4,7 @@
   import { invalidateAll } from '$app/navigation'
   import { onMount } from 'svelte'
   import { age } from '$lib/age'
+  import { emptyLine } from '$lib/empty'
   import type { Card } from '$lib/types'
 
   let { data, children } = $props()
@@ -16,15 +17,15 @@
     return () => source.close()
   })
 
+  let every = $derived(data.flows.flatMap((flow) => flow.jobs))
   let all = $derived(
-    data.flows
-      .flatMap((flow) => flow.jobs)
-      .filter((job) => {
-        const q = query.trim().toLowerCase()
-        if (!q) return true
-        return [job.flow, job.owner, job.repo, job.key, job.ref, job.title].some((value) => value.toLowerCase().includes(q))
-      }),
+    every.filter((job) => {
+      const q = query.trim().toLowerCase()
+      if (!q) return true
+      return [job.flow, job.owner, job.repo, job.key, job.ref, job.title].some((value) => value.toLowerCase().includes(q))
+    }),
   )
+  let empty = $derived(emptyLine(every.length, all.length))
   let groups = $derived([
     { key: 'blocked', label: 'blocked', jobs: all.filter((job) => job.state === 'blocked') },
     { key: 'started', label: 'started', jobs: all.filter((job) => job.state === 'started') },
@@ -67,8 +68,8 @@
           {/each}
         {/if}
       {/each}
-      {#if all.length === 0}
-        <p class="empty">No jobs yet.</p>
+      {#if empty}
+        <p class="empty">{empty}</p>
       {/if}
     </div>
   </aside>

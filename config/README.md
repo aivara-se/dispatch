@@ -31,4 +31,4 @@ This directory is an example; a deployment brings its own. The `review` flow her
 - `{ "type": "script", "path": "<file>", "args": ["..."] }` — an executable the engine runs. The path is relative to this `config/` directory.
 - `{ "type": "action", "name": "label", "value": "<label>" }` — an engine action. `label` is the only one now; the engine uses it to write `blocked` when a job stops.
 
-A job is `{flow}/{owner}/{repo}/{key}`, so the review flow's job reads `review/aivara-se/dispatch/212`. The conditions are in ADR [`002`](../docs/adrs/002-the-engine-reads-a-closed-condition-set.md).
+A job is `{flow}/{owner}/{repo}/{key}`, so the review flow's job reads `review/aivara-se/dispatch/212`. The conditions are in ADR [`029`](../docs/adrs/029-the-engine-reads-a-closed-condition-set.md).

@@ -250,8 +250,8 @@ func (s *Store) EnsureJob(ctx context.Context, start Start) (*Job, bool, error) 
 }
 
 // EndJobs ends every started job for a pull request and returns the jobs it
-// ended. A merged close writes done and passed (docs/adrs/009); an unmerged
-// close writes blocked and failed (docs/adrs/002). A task still running under
+// ended. A merged close writes done and passed (docs/adrs/036); an unmerged
+// close writes blocked and failed (docs/adrs/029). A task still running under
 // an ended job is interrupted, with its end recorded, so a done job never
 // shows a task in progress.
 func (s *Store) EndJobs(ctx context.Context, owner, repo string, number int, merged bool) ([]Job, error) {

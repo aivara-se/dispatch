@@ -1,4 +1,4 @@
-# 004 A prompt action is one Hermes one-shot
+# 031 A prompt action is one Hermes one-shot
 
 ## Context
 

@@ -90,7 +90,7 @@ func TestEndJobs(t *testing.T) {
 }
 
 func TestMergedClosePassesTheJob(t *testing.T) {
-	// ADR 009: the merge is the effect the flow wanted, so the close passes.
+	// ADR 036: the merge is the effect the flow wanted, so the close passes.
 	ctx := context.Background()
 	store := open(t)
 	if _, _, err := store.EnsureJob(ctx, start("review", 7, "7")); err != nil {
@@ -169,7 +169,7 @@ func TestMergedCloseEndsItsRunningTask(t *testing.T) {
 }
 
 func TestALateWriteKeepsAnInterruptedTask(t *testing.T) {
-	// ADR 009:15-16: the close wins. The runner's tail that arrives after it
+	// ADR 036:15-16: the close wins. The runner's tail that arrives after it
 	// changes nothing, so the task keeps interrupted and its action no exit.
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dispatch.db")
@@ -210,7 +210,7 @@ func TestALateWriteKeepsAnInterruptedTask(t *testing.T) {
 }
 
 func TestAnInterruptedActionKeepsNoExit(t *testing.T) {
-	// ADR 009:16: a killed action keeps no exit, so the write that lands after
+	// ADR 036:16: a killed action keeps no exit, so the write that lands after
 	// the close changes nothing.
 	ctx := context.Background()
 	store := open(t)

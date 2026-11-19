@@ -73,6 +73,8 @@ func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([
 }
 
 func (c *Client) read(ctx context.Context, owner, repo, path string, out any) error {
+	ctx, cancel := c.bound(ctx)
+	defer cancel()
 	token, err := c.token(ctx, owner, repo)
 	if err != nil {
 		return err

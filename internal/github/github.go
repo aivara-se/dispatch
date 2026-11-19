@@ -25,13 +25,21 @@ import (
 
 const defaultBase = "https://api.github.com"
 
+// DefaultTimeout bounds each request the client makes.
+const DefaultTimeout = 15 * time.Second
+
 // Client holds the App's key and the tokens it minted, one per repository.
 type Client struct {
-	appID  int64
-	key    *rsa.PrivateKey
-	base   string
-	http   *http.Client
-	mu     sync.Mutex
+	appID int64
+	key   *rsa.PrivateKey
+	base  string
+	http  *http.Client
+	mu    sync.Mutex
+
+	// Timeout bounds each request; New sets it to DefaultTimeout. Set it
+	// before the first call, and keep it shorter than the delivery it serves.
+	Timeout time.Duration
+
 	tokens map[string]token
 }
 
@@ -62,20 +70,23 @@ func New(appID int64, keyPEM []byte, baseURL string, httpClient *http.Client) (*
 		baseURL = defaultBase
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
+		httpClient = &http.Client{}
 	}
 	return &Client{
-		appID:  appID,
-		key:    key,
-		base:   baseURL,
-		http:   httpClient,
-		tokens: map[string]token{},
+		appID:   appID,
+		key:     key,
+		base:    baseURL,
+		http:    httpClient,
+		Timeout: DefaultTimeout,
+		tokens:  map[string]token{},
 	}, nil
 }
 
 // Block adds the blocked label to a pull request through an installation
 // token. An error names the status and never the token.
 func (c *Client) Block(ctx context.Context, owner, repo string, number int) error {
+	ctx, cancel := c.bound(ctx)
+	defer cancel()
 	token, err := c.token(ctx, owner, repo)
 	if err != nil {
 		return err
@@ -158,6 +169,8 @@ func (c *Client) createToken(ctx context.Context, signed string, installation in
 }
 
 func (c *Client) call(ctx context.Context, method, path, signed string, out any) error {
+	ctx, cancel := c.bound(ctx)
+	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
 	if err != nil {
 		return err
@@ -175,6 +188,12 @@ func (c *Client) call(ctx context.Context, method, path, signed string, out any)
 		return fmt.Errorf("github: %s: %s", path, response.Status)
 	}
 	return json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out)
+}
+
+// bound returns a context that ends after the per-request timeout, so no call
+// to GitHub can outlive it.
+func (c *Client) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, c.Timeout)
 }
 
 // jwt signs the App claims GitHub accepts for ten minutes.

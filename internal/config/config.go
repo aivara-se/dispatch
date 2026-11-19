@@ -239,6 +239,9 @@ func loadFlow(path string, cfg *Config) (Flow, error) {
 	if head.Key == "." || head.Key == ".." || strings.Contains(head.Key, "/") {
 		return Flow{}, keyError(path, "key", fmt.Sprintf("%q must be one path segment", head.Key))
 	}
+	if !strings.Contains(head.Key, "{n}") {
+		return Flow{}, keyError(path, "key", "must contain {n} so two pull requests cannot share a key")
+	}
 
 	start, ok := head.Tasks["_start_"]
 	if !ok {

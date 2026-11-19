@@ -46,6 +46,22 @@ jobs:
         run: bun x tsc -p tsconfig.json --noEmit
 
       - name: Test the CLI
+        run: bun test cli
+
+      - name: Install the web client
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Build the web client
+        working-directory: web
+        run: bun run build
+
+      - name: Check the web client
+        working-directory: web
+        run: bun run check
+
+      - name: Test the web client
+        working-directory: web
         run: bun test
 
   # The document standard, from the one checker in aivara-se/.github. This

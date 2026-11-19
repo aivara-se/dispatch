@@ -2,16 +2,20 @@
 
 ## Architecture
 
-Three parts: one Go server, one Bun CLI, one SvelteKit web client.
+Three parts: a Go server, a Bun CLI, a SvelteKit web client.
 
 - **Server** verifies deliveries, resolves the pull request, runs one task at a time per job, launches Hermes profiles, verifies conditions, and keeps the record in SQLite.
 - **API** is JSON over a Unix socket.
-- **CLI** is a client and holds no state.
+- **CLI** holds no state.
 - **Web client** is a SvelteKit app whose server code reads the socket; the browser talks only to it.
 
-The pull request is the record's root; a job runs a flow, and a task runs its actions in order — a prompt in Hermes, a script, or an engine action — while the record keeps each output, the condition it read, the tool calls and the evidence. A merged or closed pull request ends the job.
+A job runs one flow's tasks for one pull request; a task's actions run in order — a prompt, a script, an engine action — and the record keeps each output, condition, tool call and evidence. A merged or closed pull request ends the job.
 
 GitHub posts deliveries; the server reads pull requests and reviews, and writes only labels. The agent writes with its own identity and may comment on the pull request.
+
+### Deployment
+
+Each part is a systemd unit on the operator's host. The client runs as the engine's user, because the socket is `0600`, and listens on loopback. The proxy sends `/dispatch*` to it; the webhook's longer path still wins.
 
 ## Dependencies
 

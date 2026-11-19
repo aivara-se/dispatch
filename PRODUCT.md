@@ -12,7 +12,7 @@ Dispatch is the process engine for that fleet. It decides the next task, prompts
 
 **Not this version** — repository overrides; push alerts; budgets in currency; other backends.
 
-**Never** — the engine writes code, a review or a merge; it writes only the labels the flow names; it advances on an agent's word; it carries third-party text as instruction.
+**Never** — the engine writes code, a review or a merge; it writes only the `blocked` label; it advances on an agent's word; it carries third-party text as instruction.
 
 ## Behaviour
 

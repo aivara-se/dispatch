@@ -97,20 +97,25 @@ func (s *Store) FinishTask(ctx context.Context, taskID int64, state, pc, evidenc
 }
 
 // BeginAction records an action before it runs, so a crash leaves it pending.
+// A resumed task re-begins the action its crash left pending, so the row is
+// the one it already has, not a second one.
 func (s *Store) BeginAction(ctx context.Context, taskID int64, ordinal int, action Action) (int64, error) {
 	args, err := json.Marshal(action.Args)
 	if err != nil {
 		return 0, err
 	}
-	res, err := s.db.ExecContext(ctx,
+	var id int64
+	err = s.db.QueryRowContext(ctx,
 		`INSERT INTO actions (task_id, ordinal, type, agent, text, path, args, name, value, started_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (task_id, ordinal) DO UPDATE SET started_at = excluded.started_at
+		 RETURNING id`,
 		taskID, ordinal, action.Type, action.Agent, action.Text, action.Path, string(args),
-		action.Name, action.Value, stamp(time.Now()))
+		action.Name, action.Value, stamp(time.Now())).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // FinishAction writes the action's output and exit. An action whose task a

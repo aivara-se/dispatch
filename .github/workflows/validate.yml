@@ -35,6 +35,19 @@ jobs:
           go build ./...
           go test ./...
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install the CLI
+        run: bun install --frozen-lockfile
+
+      - name: Type check the CLI
+        run: bun x tsc -p tsconfig.json --noEmit
+
+      - name: Test the CLI
+        run: bun test
+
   # The document standard, from the one checker in aivara-se/.github. This
   # repository carries no copy of it.
   docs:

@@ -23,6 +23,10 @@ go vet ./...
 go build ./...
 TMPDIR=$HOME/tmp go test ./...
 
+bun install --frozen-lockfile
+bun x tsc -p tsconfig.json --noEmit
+bun test
+
 # From a checkout of aivara-se/.github:
 bun run scripts/validate-docs.ts <path to this repository> --require
 ```

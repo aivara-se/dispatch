@@ -187,6 +187,40 @@ func TestReviewsFollowPages(t *testing.T) {
 	}
 }
 
+func TestBlockIsBounded(t *testing.T) {
+	// Every request to GitHub carries a deadline, so a delivery cannot hang on
+	// a call that never answers.
+	_, keyPEM := newKey(t)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	client, err := github.New(123456, keyPEM, server.URL, &http.Client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Timeout = 50 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Block(context.Background(), "aivara-se", "dispatch", 212)
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("the call outlived its bound")
+		}
+		if !strings.Contains(err.Error(), "deadline exceeded") {
+			t.Fatalf("error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call had no timeout")
+	}
+}
+
 func newKey(t *testing.T) (*rsa.PrivateKey, []byte) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

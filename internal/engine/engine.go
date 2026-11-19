@@ -22,6 +22,12 @@ type Labeler interface {
 // Publisher announces a job that changed.
 type Publisher func(flow, owner, repo, key string)
 
+// Jobs starts and stops the runner for a job.
+type Jobs interface {
+	Start(job record.Job)
+	Kill(owner, repo string, number int)
+}
+
 // Engine applies deliveries to the record.
 type Engine struct {
 	mu      sync.Mutex
@@ -30,12 +36,14 @@ type Engine struct {
 	flows   []config.Flow
 	labeler Labeler
 	publish Publisher
+	jobs    Jobs
 }
 
 // New returns an engine over one record, the served repositories, the
-// configured flows, the App's label writer and the stream's publisher.
-func New(store *record.Store, repos []string, flows []config.Flow, labeler Labeler, publish Publisher) *Engine {
-	return &Engine{store: store, repos: repos, flows: flows, labeler: labeler, publish: publish}
+// configured flows, the App's label writer, the stream's publisher and the
+// job runner.
+func New(store *record.Store, repos []string, flows []config.Flow, labeler Labeler, publish Publisher, jobs Jobs) *Engine {
+	return &Engine{store: store, repos: repos, flows: flows, labeler: labeler, publish: publish, jobs: jobs}
 }
 
 // Deliver applies one verified delivery. A delivery that is already kept, is
@@ -58,6 +66,9 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 	var ended []record.Job
 	touched := false
 	if event.Kind == webhook.KindPullRequest && event.Action == "closed" {
+		if e.jobs != nil {
+			e.jobs.Kill(event.Owner, event.Repo, event.Number)
+		}
 		ended, err = e.store.EndJobs(ctx, event.Owner, event.Repo, event.Number, event.Merged)
 		if err != nil {
 			return err
@@ -67,7 +78,8 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 
 	holds := holding(event)
 	for _, flow := range e.flows {
-		if _, ok := startTarget(flow, holds); !ok {
+		target, ok := startTarget(flow, holds)
+		if !ok {
 			continue
 		}
 		job, created, err := e.store.EnsureJob(ctx, record.Start{
@@ -78,11 +90,15 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 			Key:    strings.ReplaceAll(flow.Key, "{n}", strconv.Itoa(event.Number)),
 			Title:  event.Title,
 			Link:   event.Link,
+			Task:   target,
 		})
 		if err != nil {
 			return err
 		}
 		if created {
+			if e.jobs != nil {
+				e.jobs.Start(*job)
+			}
 			e.announce(*job)
 		}
 		touched = true

@@ -1,0 +1,22 @@
+{
+  "key": "{n}",
+  "tasks": {
+    "_start_": { "next": { "pr.created": "review" } },
+    "review": {
+      "actions": [
+        { "type": "prompt", "agent": "momo", "text": "Review {pr.url}." },
+        { "type": "script", "path": "check.sh", "args": ["--fast"] },
+        { "type": "action", "name": "label", "value": "blocked" }
+      ],
+      "limit": { "turn": 2, "time": 2 },
+      "next": { "pr.approved": "_done_", "pr.rejected": "correct" }
+    },
+    "correct": {
+      "actions": [
+        { "type": "prompt", "agent": "memo", "text": "Correct {pr.url}." }
+      ],
+      "limit": { "turn": 1, "time": 2 },
+      "next": { "pr.updated": "review" }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "key": "single-{n}",
+  "tasks": {
+    "_start_": { "next": { "pr.created": "run" } },
+    "run": {
+      "actions": [
+        { "type": "prompt", "agent": "memo", "text": "Go {pr.url}." }
+      ],
+      "limit": { "turn": 2, "time": 1 },
+      "next": { "pr.approved": "_done_" }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "dispatch",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dispatch": "bun run cli/dispatch.ts",
+    "check": "bun x tsc -p tsconfig.json --noEmit",
+    "test": "bun test"
+  },
+  "bin": {
+    "dispatch": "cli/dispatch.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^7"
+  }
+}

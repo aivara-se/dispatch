@@ -11,6 +11,7 @@ const cause = new Date(Date.now() - 7200_000).toISOString()
 
 const card = (key: string, state: string, verdict: string, title: string) => ({
   flow: "review",
+  agent: key.includes("-") ? key.split("-")[1] : "",
   owner: "aivara-se",
   repo: "dispatch",
   key,
@@ -141,6 +142,20 @@ test("the flow page opens its first blocked job", async () => {
   const response = await fetch(`http://127.0.0.1:${port}/flows/review`, { redirect: "manual" })
   expect(response.status).toBe(302)
   expect(response.headers.get("location")).toBe("/jobs/review/aivara-se/dispatch/212")
+})
+
+test("a flow's jobs are served as json, uncached", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/review`)
+  expect(response.status).toBe(200)
+  expect(response.headers.get("cache-control")).toBe("no-store")
+  const body = (await response.json()) as { jobs: { key: string; state: string }[] }
+  expect(body.jobs).toHaveLength(3)
+  expect(body.jobs[0]?.state).toBe("blocked")
+})
+
+test("an unknown flow's jobs are 404", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/nope`)
+  expect(response.status).toBe(404)
 })
 
 test("a flow with no jobs says so", async () => {

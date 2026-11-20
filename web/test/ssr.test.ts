@@ -11,7 +11,6 @@ const cause = new Date(Date.now() - 7200_000).toISOString()
 
 const card = (key: string, state: string, verdict: string, title: string) => ({
   flow: "review",
-  agent: key.includes("-") ? key.split("-")[1] : "",
   owner: "aivara-se",
   repo: "dispatch",
   key,
@@ -62,21 +61,17 @@ const cards = [
   card("210", "done", "passed", "land the cli"),
 ]
 
-let emptyReads = 0
-
 rmSync(socket, { force: true })
 const api = Bun.serve({
   unix: socket,
   fetch(request) {
     const path = new URL(request.url).pathname
     if (path === "/v1/flows")
-      return Response.json({ flows: [{ name: "review", jobs: 3 }, { name: "audit", jobs: 0 }, { name: "empty", jobs: 0 }] })
+      return Response.json({ flows: [{ name: "review", jobs: 3 }, { name: "correct", jobs: 1 }, { name: "audit", jobs: 0 }] })
     if (path === "/v1/flows/review/jobs") return Response.json({ jobs: cards })
+    if (path === "/v1/flows/correct/jobs")
+      return Response.json({ jobs: [{ ...card("214", "started", "pending", "audit the socket"), flow: "correct" }] })
     if (path === "/v1/flows/audit/jobs") return Response.json({ jobs: [] })
-    if (path === "/v1/flows/empty/jobs") {
-      emptyReads++
-      return Response.json({ jobs: [] })
-    }
     if (path === "/v1/flows/review/jobs/aivara-se/dispatch/212") return Response.json(detail)
     if (path === "/v1/stream") {
       const body = new ReadableStream({
@@ -115,9 +110,7 @@ beforeAll(async () => {
 afterAll(() => {
   web?.kill()
   api.stop(true)
-  let emptyReads = 0
-
-rmSync(socket, { force: true })
+  rmSync(socket, { force: true })
 })
 
 test("the server renders the record before hydration", async () => {
@@ -153,22 +146,22 @@ test("the flow page opens its first blocked job", async () => {
   expect(response.headers.get("location")).toBe("/jobs/review/aivara-se/dispatch/212")
 })
 
-test("a pull request's jobs are served across flows, uncached", async () => {
-  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/212`)
+test("a pull request's live jobs are served across flows, uncached", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/214`)
   expect(response.status).toBe(200)
   expect(response.headers.get("cache-control")).toBe("no-store")
-  const body = (await response.json()) as { ref: string; jobs: { key: string; state: string; flow: string }[] }
-  expect(body.ref).toBe("aivara-se/dispatch#212")
-  expect(body.jobs).toHaveLength(1)
-  expect(body.jobs[0]?.flow).toBe("review")
-  expect(body.jobs[0]?.state).toBe("blocked")
+  const body = (await response.json()) as { ref: string; jobs: { flow: string; state: string }[] }
+  expect(body.ref).toBe("aivara-se/dispatch#214")
+  expect(body.jobs.map((job) => job.flow)).toEqual(["review", "correct"])
+  expect(body.jobs.every((job) => job.state === "started")).toBe(true)
 })
 
-test("a flow with no jobs is not read", async () => {
-  emptyReads = 0
-  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/212`)
-  expect(response.status).toBe(200)
-  expect(emptyReads).toBe(0)
+test("a job that has ended does not own the branch", async () => {
+  for (const number of ["212", "210"]) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/${number}`)
+    expect(response.status).toBe(200)
+    expect(((await response.json()) as { jobs: unknown[] }).jobs).toHaveLength(0)
+  }
 })
 
 test("a pull request with no job is an empty list, not an error", async () => {

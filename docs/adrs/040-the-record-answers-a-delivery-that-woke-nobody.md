@@ -14,6 +14,7 @@
 - The row is written once, at the point the service stops considering that delivery, and it is the dedupe claim. So no row still means the service did not finish, and redelivering every failed delivery stays safe.
 - A delivery that names no pull request, or a repository the service does not serve, keeps no row: the allowlist and GitHub's own delivery list answer those, and the App's install scope would otherwise fill the record with other repositories' traffic.
 - A `started` row counts the jobs the delivery started, so one delivery that wakes two reviewers reads one row with `2` beside two job rows.
+- One row carries one reason, so two reasons in one delivery rank. `no-flow` first, because nothing was routable; then `team-review`, which names no user; then `unheld-login`; then `already-started`. The order is what the record would otherwise hide: a job that exists is in the record with its own row, and a login no agent holds is nowhere else.
 - The reason names the service's own finding, never an agent's text.
 
 ## Consequences
@@ -23,4 +24,5 @@
 - An ignored delivery is claimed, so a redelivery of it is refused. When a configuration change would make it act, the operator requests the review again.
 - `038`'s "a login no agent holds ... appends no line" is retired; its silence still wakes nobody, and it now says why.
 - A delivery that names a held login and an unheld one is `started` with the reason `unheld-login`, so the row names the class and not the login: the pull request's reviewer list is where the login reads.
+- A delivery whose job already exists and that also names a login no agent holds reads `unheld-login`, so the row does not say the job was already in hand. The jobs table says that, under the agent's own key.
 - An unserved repository reads only in GitHub's delivery list, which the service does not have a credential to read.

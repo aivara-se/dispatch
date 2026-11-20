@@ -52,17 +52,36 @@ func TestLoadAcceptsTheExample(t *testing.T) {
 	if cfg.AppID != 123456 || cfg.KeyPath != "/root/.dispatch/app.pem" {
 		t.Fatalf("app = %d %q", cfg.AppID, cfg.KeyPath)
 	}
-	if len(flows) != 1 || flows[0].Name != "review" {
+	byName := map[string]config.Flow{}
+	for _, flow := range flows {
+		byName[flow.Name] = flow
+	}
+	if len(flows) != 3 {
 		t.Fatalf("flows = %+v", flows)
 	}
-	if flows[0].Key != "{n}" {
-		t.Fatalf("key = %q", flows[0].Key)
+	review := byName["review"]
+	if review.Key != "{n}-{agent}" {
+		t.Fatalf("key = %q", review.Key)
 	}
-	if len(flows[0].Start) != 1 || flows[0].Start[0] != (config.Condition{Key: "pr.created", Target: "review"}) {
-		t.Fatalf("start = %+v", flows[0].Start)
+	if len(review.Start) != 1 || review.Start[0] != (config.Condition{Key: "pr.review_requested", Target: "review"}) {
+		t.Fatalf("start = %+v", review.Start)
 	}
-	if got := flows[0].Tasks["review"].Limit; got.Turn != 10 || got.Time != 1800 {
+	if got := review.Tasks["review"].Actions[0].Agent; got != config.PlaceholderAgent {
+		t.Fatalf("agent = %q", got)
+	}
+	if got := review.Tasks["review"].Limit; got.Turn != 10 || got.Time != 1800 {
 		t.Fatalf("limit = %+v", got)
+	}
+	// merge and correct run once per pull request, so each starts on a pull
+	// request condition and takes no agent (docs/adrs/038).
+	for _, name := range []string{"correct", "merge"} {
+		flow, ok := byName[name]
+		if !ok || flow.Key != "{n}" {
+			t.Fatalf("%s = %+v", name, flow)
+		}
+		if len(flow.Start) != 1 || config.PerLogin(flow.Start[0].Key) {
+			t.Fatalf("%s start = %+v", name, flow.Start)
+		}
 	}
 }
 

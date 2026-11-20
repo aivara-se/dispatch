@@ -32,4 +32,4 @@ This directory is an example; a deployment brings its own, flows included.
 - `{ "type": "script", "path": "<file>", "args": ["..."] }` — an executable the engine runs. The path is relative to this `config/` directory.
 - `{ "type": "action", "name": "label", "value": "<label>" }` — an engine action. `label` is the only one now; the engine uses it to write `blocked` when a job stops.
 
-A job is `{flow}/{owner}/{repo}/{key}`, so the review flow's job reads `review/aivara-se/dispatch/212-momo`. The condition set is ADR [`029`](../docs/adrs/029-the-engine-reads-a-closed-condition-set.md), widened to seven by [`038`](../docs/adrs/038-a-delivery-wakes-the-agent-its-login-names.md): `pr.review_requested` and `pr.assigned` are proved by a delivery alone.
+A job is `{flow}/{owner}/{repo}/{key}`, so the review flow's job reads `review/aivara-se/dispatch/212-momo`. The condition set is ADR [`002`](../docs/adrs/002-the-engine-reads-a-closed-condition-set.md): seven conditions, two of which a delivery alone proves.

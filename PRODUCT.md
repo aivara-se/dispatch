@@ -2,9 +2,7 @@
 
 ## Problem
 
-One person runs a fleet of agents on GitHub. A review request, a failing check or a mention reaches an agent only because that person relays it, and nothing proves the work happened. The operator is router and verifier; a silent stop looks like an idle day.
-
-Dispatch is the process engine for that fleet. It decides the next task, prompts the agent that owns it, and proves the step on GitHub before it moves on. Agents do the work; one operator runs the engine.
+One person runs a fleet of agents on GitHub. A review request, an approval or a failing check reaches an agent only because that person relays it, and nothing proves the work happened. Dispatch decides the next task, prompts the agent that owns it, and proves the step on GitHub before it moves on.
 
 ## Scope
 
@@ -12,24 +10,20 @@ Dispatch is the process engine for that fleet. It decides the next task, prompts
 
 **Not this version** — repository overrides; push alerts; budgets in currency; other backends.
 
-**Never** — the engine writes code, a review or a merge; it writes only the `blocked` label; it advances on an agent's word; it carries third-party text as instruction.
+**Never** — the engine writes code, a review or a merge, or anything but the `blocked` label; it advances on an agent's word; it carries third-party text as instruction.
 
 ## Behaviour
 
-- A pull request is the unit; a job runs one flow's tasks.
+- A pull request is the unit; a job runs one flow's tasks, and a task runs its actions in order.
 - Flows are user configuration; the engine ships none.
 - A delivery that names no pull request starts nothing.
-- A task runs its actions in order; every action must exit zero.
-- The engine advances only when it reads a condition on GitHub.
+- The engine advances only on a condition it reads on GitHub.
 - A report of success without the effect is a false report; the job stops.
-- A job stops at the limit its configuration sets.
 - One task runs per job at a time; a delivery that arrives during one waits.
-- A prompt action's output stays in the record; an agent comments only when it sees fit.
-- A merge is an agent task; the engine never merges.
-- A merged or closed pull request ends the job.
-- The engine labels a stopped job `blocked`.
-- The record keeps each action's output, the verdict, the tool calls and the evidence.
-- The CLI and the web client read the record; the client shows each task's actions, outputs and tool calls.
+- A job stops at the limit its flow sets, and takes the `blocked` label.
+- A prompt action's output stays in the record; the agent comments on the pull request only when it sees fit.
+- A merged pull request ends its jobs `done`; a closed one `blocked`; a task still running is `interrupted`.
+- The record keeps each action's output and exit, the verdict, the tool calls and the evidence.
 
 ## Autonomy
 
@@ -37,13 +31,12 @@ An agent decides how it works: model, tools, sandbox, skills and the code inside
 
 ## Vision
 
-One engine for the fleet, one record per pull request, agents free to work. It must not become the writer, the planner or a second GitHub client.
+One engine for the fleet, one record per pull request, agents free to work.
 
 ## Acceptance
 
-- A job ends in `_done_` or `blocked`.
-- A task runs its actions in order; a non-zero exit stops the job.
-- A false report stops the job.
+- A job ends `done` or `blocked`.
+- A non-zero exit stops the job, and so does a false report.
 - A job stops at its limit.
 - The engine writes only `blocked`.
-- Every task shows its actions and outputs.
+- Every task shows its actions, outputs and tool calls to the CLI and the web client.

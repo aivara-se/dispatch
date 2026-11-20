@@ -203,6 +203,14 @@ func TestLoadRefusesInvalidConfiguration(t *testing.T) {
 			key:  "agents.momo.login",
 		},
 		{
+			name:     "start mixes a login with a pull request",
+			dispatch: goodDispatch,
+			flow: strings.Replace(goodFlow, `"pr.created": "review"`,
+				`"pr.created": "review", "pr.review_requested": "review"`, 1),
+			file: "review.json",
+			key:  "tasks._start_.next",
+		},
+		{
 			name:     "login flow key without the agent",
 			dispatch: goodDispatch,
 			flow:     strings.Replace(goodFlow, `"pr.created": "review"`, `"pr.review_requested": "review"`, 1),

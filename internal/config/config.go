@@ -312,12 +312,23 @@ func loadFlow(path string, cfg *Config) (Flow, error) {
 	if err := validateNext(path, "tasks._start_.next", flow.Start, known); err != nil {
 		return Flow{}, err
 	}
-	perLogin := false
+	perLogin, perRequest := false, false
 	for _, c := range flow.Start {
 		if !starts[c.Key] {
 			return Flow{}, keyError(path, "tasks._start_.next."+c.Key, "no delivery proves this condition")
 		}
-		perLogin = perLogin || PerLogin(c.Key)
+		if PerLogin(c.Key) {
+			perLogin = true
+		} else {
+			perRequest = true
+		}
+	}
+	// A start names logins or none (docs/adrs/039). On a delivery that proves
+	// both, the first key would start a job with no agent in a flow written
+	// for one, and the agent would never wake.
+	if perLogin && perRequest {
+		return Flow{}, keyError(path, "tasks._start_.next",
+			"names a login condition and a pull request condition")
 	}
 	// Two agents' jobs must not share a session, and the session is the key.
 	namesAgent := strings.Contains(head.Key, PlaceholderAgent)

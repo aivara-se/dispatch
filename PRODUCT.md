@@ -29,7 +29,7 @@ Dispatch is the process engine for that fleet. It decides the next task, prompts
 - A merged or closed pull request ends the job.
 - The engine labels a stopped job `blocked`.
 - The record keeps each action's output, the verdict, the tool calls and the evidence.
-- The CLI and the web client read the record; the client shows each task's actions and outputs.
+- The CLI and the web client read the record; the client shows each task's actions, outputs and tool calls, the calls twelve at a time, each clipped to 120 characters.
 
 ## Autonomy
 

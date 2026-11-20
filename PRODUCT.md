@@ -8,7 +8,7 @@ Dispatch is the process engine for that fleet. It decides the next task, prompts
 
 ## Scope
 
-**In** — a job per flow per pull request; Hermes profiles; a GitHub App that labels; a record of every task; a server, a CLI and a web client.
+**In** — a job per flow per pull request per agent; Hermes profiles; a GitHub App that labels; a record of every task; a server, a CLI and a web client.
 
 **Not this version** — repository overrides; push alerts; budgets in currency; other backends.
 

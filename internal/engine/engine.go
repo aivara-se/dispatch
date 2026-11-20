@@ -34,16 +34,19 @@ type Engine struct {
 	store   *record.Store
 	repos   []string
 	flows   []config.Flow
+	agents  map[string]config.Agent
 	labeler Labeler
 	publish Publisher
 	jobs    Jobs
 }
 
 // New returns an engine over one record, the served repositories, the
-// configured flows, the App's label writer, the stream's publisher and the
-// job runner.
-func New(store *record.Store, repos []string, flows []config.Flow, labeler Labeler, publish Publisher, jobs Jobs) *Engine {
-	return &Engine{store: store, repos: repos, flows: flows, labeler: labeler, publish: publish, jobs: jobs}
+// configured flows, the agents a login names, the App's label writer, the
+// stream's publisher and the job runner.
+func New(store *record.Store, repos []string, flows []config.Flow, agents map[string]config.Agent,
+	labeler Labeler, publish Publisher, jobs Jobs) *Engine {
+	return &Engine{store: store, repos: repos, flows: flows, agents: agents,
+		labeler: labeler, publish: publish, jobs: jobs}
 }
 
 // Deliver applies one verified delivery. A delivery that is already kept, is
@@ -76,32 +79,33 @@ func (e *Engine) Deliver(ctx context.Context, event webhook.Event) error {
 		touched = len(ended) > 0
 	}
 
-	holds := holding(event)
+	proof := proved(event)
 	for _, flow := range e.flows {
-		target, ok := startTarget(flow, holds)
-		if !ok {
-			continue
-		}
-		job, created, err := e.store.EnsureJob(ctx, record.Start{
-			Flow:   flow.Name,
-			Owner:  event.Owner,
-			Repo:   event.Repo,
-			Number: event.Number,
-			Key:    strings.ReplaceAll(flow.Key, "{n}", strconv.Itoa(event.Number)),
-			Title:  event.Title,
-			Link:   event.Link,
-			Task:   target,
-		})
-		if err != nil {
-			return err
-		}
-		if created {
-			if e.jobs != nil {
-				e.jobs.Start(*job)
+		for _, start := range e.starts(flow, proof) {
+			key := strings.ReplaceAll(flow.Key, "{n}", strconv.Itoa(event.Number))
+			key = strings.ReplaceAll(key, config.PlaceholderAgent, start.agent)
+			job, created, err := e.store.EnsureJob(ctx, record.Start{
+				Flow:   flow.Name,
+				Owner:  event.Owner,
+				Repo:   event.Repo,
+				Number: event.Number,
+				Key:    key,
+				Agent:  start.agent,
+				Title:  event.Title,
+				Link:   event.Link,
+				Task:   start.task,
+			})
+			if err != nil {
+				return err
 			}
-			e.announce(*job)
+			if created {
+				if e.jobs != nil {
+					e.jobs.Start(*job)
+				}
+				e.announce(*job)
+			}
+			touched = true
 		}
-		touched = true
 	}
 
 	// A close writes the label the flow names. A rejected write is kept on the
@@ -155,34 +159,74 @@ func (e *Engine) serves(owner, repo string) bool {
 	return false
 }
 
-// holding is the set of conditions this delivery proves. pr.updated and
+// start is one job a delivery starts: the task, and the agent a login named.
+type start struct {
+	agent string
+	task  string
+}
+
+// proof is what a delivery proves: the conditions that hold, and the logins
+// each login condition names.
+type proof struct {
+	holds  map[string]bool
+	logins map[string][]string
+}
+
+// proved is the set of conditions this delivery proves. pr.updated and
 // pr.merged are read after a task, never from a delivery, so neither is here.
-func holding(event webhook.Event) map[string]bool {
-	holds := map[string]bool{}
+func proved(event webhook.Event) proof {
+	p := proof{holds: map[string]bool{}, logins: map[string][]string{}}
 	switch event.Kind {
 	case webhook.KindPullRequest:
-		if event.Action == "opened" {
-			holds[config.ConditionCreated] = true
+		switch event.Action {
+		case "opened":
+			p.holds[config.ConditionCreated] = true
+			if len(event.Logins) > 0 {
+				p.holds[config.ConditionReviewRequested] = true
+				p.logins[config.ConditionReviewRequested] = event.Logins
+			}
+		case "review_requested":
+			p.holds[config.ConditionReviewRequested] = true
+			p.logins[config.ConditionReviewRequested] = event.Logins
+		case "assigned":
+			p.holds[config.ConditionAssigned] = true
+			p.logins[config.ConditionAssigned] = event.Logins
 		}
 	case webhook.KindPullRequestReview:
 		if event.Action == "submitted" {
 			switch event.Review {
 			case "approved":
-				holds[config.ConditionApproved] = true
+				p.holds[config.ConditionApproved] = true
 			case "changes_requested":
-				holds[config.ConditionRejected] = true
+				p.holds[config.ConditionRejected] = true
 			}
 		}
 	}
-	return holds
+	return p
 }
 
-// startTarget returns the target of the first start condition that holds.
-func startTarget(flow config.Flow, holds map[string]bool) (string, bool) {
+// starts returns the jobs a flow starts on this delivery: one for the first
+// pull-request condition that holds, and one per login an agent holds for the
+// first login condition that holds. A login no agent holds starts nothing.
+func (e *Engine) starts(flow config.Flow, p proof) []start {
 	for _, condition := range flow.Start {
-		if holds[condition.Key] {
-			return condition.Target, true
+		if !p.holds[condition.Key] {
+			continue
 		}
+		if !config.PerLogin(condition.Key) {
+			return []start{{task: condition.Target}}
+		}
+		var out []start
+		seen := map[string]bool{}
+		for _, login := range p.logins[condition.Key] {
+			agent, ok := config.AgentFor(e.agents, login)
+			if !ok || seen[agent] {
+				continue
+			}
+			seen[agent] = true
+			out = append(out, start{agent: agent, task: condition.Target})
+		}
+		return out
 	}
-	return "", false
+	return nil
 }

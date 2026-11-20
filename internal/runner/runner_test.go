@@ -305,7 +305,7 @@ func TestResumeSkipsFinishedActions(t *testing.T) {
 	if err := store.SetTaskID(context.Background(), job.ID, begun.ID); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestACrashBeforeAnActionFinishesResumesOnResume(t *testing.T) {
 	if err := store.SetTaskID(context.Background(), job.ID, begun.ID); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestKillStopsTheAction(t *testing.T) {
 		t.Fatal("the action was not killed")
 	}
 	time.Sleep(50 * time.Millisecond)
-	current, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	current, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestACloseKeepsTheTaskItInterrupted(t *testing.T) {
 	close(launch.release)
 	time.Sleep(200 * time.Millisecond)
 
-	ended, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	ended, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestATaskDoneBeforeTheCrashFinishesOnResume(t *testing.T) {
 	if err := store.SetTaskID(context.Background(), job.ID, begun.ID); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212)
+	reloaded, err := store.Job(context.Background(), "single", "aivara-se", "dispatch", 212, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestATaskDoneBeforeTheCrashFinishesOnResume(t *testing.T) {
 	}
 }
 
-func newHarness(t *testing.T, flowName, taskName, key string, cond *conditions) (*record.Store, record.Job, *runner.Runner, *launch, *labeler) {
+func newHarness(t *testing.T, flowName, taskName, key string, cond *conditions, agent ...string) (*record.Store, record.Job, *runner.Runner, *launch, *labeler) {
 	t.Helper()
 	_, flows, err := config.Load("testdata")
 	if err != nil {
@@ -486,8 +486,12 @@ func newHarness(t *testing.T, flowName, taskName, key string, cond *conditions) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
+	started := ""
+	if len(agent) > 0 {
+		started = agent[0]
+	}
 	job, _, err := store.EnsureJob(context.Background(), record.Start{
-		Flow: flowName, Owner: "aivara-se", Repo: "dispatch", Number: 212, Key: key,
+		Flow: flowName, Owner: "aivara-se", Repo: "dispatch", Number: 212, Key: key, Agent: started,
 		Title: "a title", Link: "https://github.com/aivara-se/dispatch/pull/212", Task: taskName,
 	})
 	if err != nil {
@@ -501,16 +505,20 @@ func newHarness(t *testing.T, flowName, taskName, key string, cond *conditions) 
 	return store, *job, r, launcher, labels
 }
 
-func wait(t *testing.T, store *record.Store, flow string) record.Job {
+func wait(t *testing.T, store *record.Store, flow string, agent ...string) record.Job {
 	t.Helper()
-	return waitRepo(t, store, flow, "dispatch")
+	name := ""
+	if len(agent) > 0 {
+		name = agent[0]
+	}
+	return waitAgent(t, store, flow, "dispatch", name)
 }
 
-func waitRepo(t *testing.T, store *record.Store, flow, repo string) record.Job {
+func waitAgent(t *testing.T, store *record.Store, flow, repo, agent string) record.Job {
 	t.Helper()
 	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
-		job, err := store.Job(context.Background(), flow, "aivara-se", repo, 212)
+		job, err := store.Job(context.Background(), flow, "aivara-se", repo, 212, agent)
 		if err == nil && job.State != record.StateStarted {
 			return *job
 		}
@@ -518,4 +526,61 @@ func waitRepo(t *testing.T, store *record.Store, flow, repo string) record.Job {
 	}
 	t.Fatal("the job did not end")
 	return record.Job{}
+}
+
+func waitRepo(t *testing.T, store *record.Store, flow, repo string) record.Job {
+	t.Helper()
+	return waitAgent(t, store, flow, repo, "")
+}
+
+func TestThePlaceholderRunsTheJobsAgent(t *testing.T) {
+	store, job, r, launch, _ := newHarness(t, "agent", "review", "212-momo", &conditions{
+		head:  "s1",
+		holds: map[string]bool{"pr.approved": true},
+	}, "momo")
+
+	r.Start(job)
+	ended := wait(t, store, "agent", "momo")
+	if ended.State != record.StateDone {
+		t.Fatalf("job = %s/%s", ended.State, ended.Verdict)
+	}
+	if launch.count() != 1 || launch.calls[0].profile != "momo" {
+		t.Fatalf("calls = %+v", launch.calls)
+	}
+	if launch.calls[0].session != "agent/aivara-se/dispatch/212-momo" {
+		t.Fatalf("session = %q", launch.calls[0].session)
+	}
+	tasks, err := store.Tasks(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks[0].Actions) != 1 || tasks[0].Actions[0].Agent != "momo" {
+		t.Fatalf("the recorded action keeps the placeholder: %+v", tasks[0].Actions)
+	}
+}
+
+func TestTwoAgentsJobsRunAtOnce(t *testing.T) {
+	store, memo, r, launch, _ := newHarness(t, "agent", "review", "212-memo", &conditions{
+		head:  "s1",
+		holds: map[string]bool{"pr.approved": true},
+	}, "memo")
+	momo, _, err := store.EnsureJob(context.Background(), record.Start{
+		Flow: "agent", Owner: "aivara-se", Repo: "dispatch", Number: 212, Key: "212-momo", Agent: "momo",
+		Task: "review",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.Start(memo)
+	r.Start(*momo)
+	waitAgent(t, store, "agent", "dispatch", "memo")
+	waitAgent(t, store, "agent", "dispatch", "momo")
+
+	if launch.count() != 2 {
+		t.Fatalf("launches = %+v", launch.calls)
+	}
+	if launch.calls[0].session == launch.calls[1].session {
+		t.Fatalf("two agents share the session %q", launch.calls[0].session)
+	}
 }

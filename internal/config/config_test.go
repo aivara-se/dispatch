@@ -18,7 +18,7 @@ const goodDispatch = `{
   "key_path": "/tmp/app.pem",
   "repos": ["aivara-se/*"],
   "hermes": "/usr/local/bin/hermes",
-  "agents": { "memo": { "profile": "memo" } }
+  "agents": { "memo": { "profile": "memo", "login": "memo-bot" } }
 }`
 
 const goodFlow = `{
@@ -63,6 +63,22 @@ func TestLoadAcceptsTheExample(t *testing.T) {
 	}
 	if got := flows[0].Tasks["review"].Limit; got.Turn != 10 || got.Time != 1800 {
 		t.Fatalf("limit = %+v", got)
+	}
+}
+
+func TestLoadAcceptsALoginFlow(t *testing.T) {
+	flow := strings.Replace(goodFlow, `"key": "{n}"`, `"key": "{n}-{agent}"`, 1)
+	flow = strings.Replace(flow, `"pr.created": "review"`, `"pr.assigned": "review"`, 1)
+	flow = strings.Replace(flow, `"agent": "memo"`, `"agent": "{agent}"`, 1)
+	_, flows, err := load(t, goodDispatch, map[string]string{"assign": flow})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if flows[0].Start[0].Key != config.ConditionAssigned {
+		t.Fatalf("start = %+v", flows[0].Start)
+	}
+	if flows[0].Tasks["review"].Actions[0].Agent != config.PlaceholderAgent {
+		t.Fatalf("agent = %q", flows[0].Tasks["review"].Actions[0].Agent)
 	}
 }
 
@@ -169,6 +185,43 @@ func TestLoadRefusesInvalidConfiguration(t *testing.T) {
 			flow:     strings.Replace(goodFlow, `"key": "{n}"`, `"key": "verify"`, 1),
 			file:     "review.json",
 			key:      "key",
+		},
+		{
+			name:     "agent without a login",
+			dispatch: strings.Replace(goodDispatch, `, "login": "memo-bot"`, ``, 1),
+			flow:     goodFlow,
+			file:     "dispatch.json",
+			key:      "agents.memo.login",
+		},
+		{
+			name: "login held by two agents",
+			dispatch: strings.Replace(goodDispatch,
+				`{ "memo": { "profile": "memo", "login": "memo-bot" } }`,
+				`{ "memo": { "profile": "memo", "login": "memo-bot" }, "momo": { "profile": "momo", "login": "MEMO-bot" } }`, 1),
+			flow: goodFlow,
+			file: "dispatch.json",
+			key:  "agents.momo.login",
+		},
+		{
+			name:     "login flow key without the agent",
+			dispatch: goodDispatch,
+			flow:     strings.Replace(goodFlow, `"pr.created": "review"`, `"pr.review_requested": "review"`, 1),
+			file:     "review.json",
+			key:      "key",
+		},
+		{
+			name:     "agent in the key of a pull request flow",
+			dispatch: goodDispatch,
+			flow:     strings.Replace(goodFlow, `"key": "{n}"`, `"key": "{n}-{agent}"`, 1),
+			file:     "review.json",
+			key:      "key",
+		},
+		{
+			name:     "agent placeholder in a pull request flow",
+			dispatch: goodDispatch,
+			flow:     strings.Replace(goodFlow, `"agent": "memo"`, `"agent": "{agent}"`, 1),
+			file:     "review.json",
+			key:      "tasks.review.actions[0].agent",
 		},
 	}
 

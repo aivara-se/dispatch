@@ -7,7 +7,7 @@
   "repos": ["aivara-se/*"],
   "hermes": "/root/.local/bin/hermes",
   "agents": {
-    "momo": { "profile": "momo" },
-    "meme": { "profile": "meme" }
+    "momo": { "profile": "momo", "login": "thani-sh-momo" },
+    "meme": { "profile": "meme", "login": "thani-sh-meme" }
   }
 }

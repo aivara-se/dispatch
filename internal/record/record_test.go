@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aivara-se/dispatch/internal/record"
@@ -71,7 +73,7 @@ func TestEndJobs(t *testing.T) {
 			if len(ended) != 1 {
 				t.Fatalf("ended = %d", len(ended))
 			}
-			job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7)
+			job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,7 +105,7 @@ func TestMergedClosePassesTheJob(t *testing.T) {
 	if len(ended) != 1 || ended[0].State != record.StateDone || ended[0].Verdict != record.VerdictPassed {
 		t.Fatalf("ended = %+v", ended)
 	}
-	job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7)
+	job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +293,7 @@ func TestOpenMigratesAnM0Record(t *testing.T) {
 		t.Fatalf("open an m0 record: %v", err)
 	}
 	defer store.Close()
-	job, err := store.Job(context.Background(), "review", "aivara-se", "dispatch", 212)
+	job, err := store.Job(context.Background(), "review", "aivara-se", "dispatch", 212, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,14 +321,14 @@ func TestJobSurvivesReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	job, err := second.Job(ctx, "review", "aivara-se", "dispatch", 9)
+	job, err := second.Job(ctx, "review", "aivara-se", "dispatch", 9, "")
 	if err != nil {
 		t.Fatalf("job after reopen: %v", err)
 	}
 	if job.Key != "9" || job.State != record.StateStarted {
 		t.Fatalf("job = %+v", job)
 	}
-	if _, err := second.Job(ctx, "other", "aivara-se", "dispatch", 9); !errors.Is(err, record.ErrNotFound) {
+	if _, err := second.Job(ctx, "other", "aivara-se", "dispatch", 9, ""); !errors.Is(err, record.ErrNotFound) {
 		t.Fatalf("unknown job error = %v", err)
 	}
 }
@@ -343,4 +345,142 @@ func open(t *testing.T) *record.Store {
 
 func start(flow string, number int, key string) record.Start {
 	return record.Start{Flow: flow, Owner: "aivara-se", Repo: "dispatch", Number: number, Key: key}
+}
+
+// A record written before the agent joined a job's identity is rebuilt on
+// open: every job, task and action survives, and a second agent's job for the
+// same pull request can then be written.
+func TestOpenRebuildsTheJobsTableKeepingTasks(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			flow TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+			key TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', link TEXT NOT NULL DEFAULT '', alert TEXT,
+			task TEXT NOT NULL DEFAULT '', task_id INTEGER NOT NULL DEFAULT 0,
+			state TEXT NOT NULL, verdict TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+			UNIQUE (flow, owner, repo, number))`,
+		`CREATE TABLE tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id INTEGER NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
+			name TEXT NOT NULL, n INTEGER NOT NULL, state TEXT NOT NULL,
+			pc TEXT, evidence TEXT, tools TEXT, head TEXT,
+			started_at TEXT, ended_at TEXT,
+			UNIQUE (job_id, n))`,
+		`CREATE TABLE actions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id INTEGER NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
+			ordinal INTEGER NOT NULL, type TEXT NOT NULL, agent TEXT, text TEXT, path TEXT, args TEXT,
+			name TEXT, value TEXT, output TEXT, exit INTEGER, skipped INTEGER NOT NULL DEFAULT 0,
+			started_at TEXT, ended_at TEXT,
+			UNIQUE (task_id, ordinal))`,
+		`INSERT INTO jobs (id, flow, owner, repo, number, key, title, task, state, verdict, created_at, updated_at)
+		 VALUES (7, 'review', 'aivara-se', 'dispatch', 212, '212', 'a title', 'review', 'started', 'pending',
+		 '2026-11-19T00:00:00Z', '2026-11-19T00:00:00Z')`,
+		`INSERT INTO tasks (id, job_id, name, n, state, head) VALUES (3, 7, 'review', 1, 'running', 'sha1')`,
+		`INSERT INTO actions (task_id, ordinal, type, agent, text) VALUES (3, 0, 'prompt', 'memo', 'Review {pr.url}.')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("%v: %v", err, statement)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := record.Open(path)
+	if err != nil {
+		t.Fatalf("open the old record: %v", err)
+	}
+	defer store.Close()
+
+	job, err := store.Job(ctx, "review", "aivara-se", "dispatch", 212, "")
+	if err != nil {
+		t.Fatalf("job after the rebuild: %v", err)
+	}
+	if job.ID != 7 || job.Key != "212" || job.Title != "a title" || job.Agent != "" {
+		t.Fatalf("job = %+v", job)
+	}
+	tasks, err := store.Tasks(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("tasks after the rebuild: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != 3 || len(tasks[0].Actions) != 1 {
+		t.Fatalf("the rebuild lost a task: %+v", tasks)
+	}
+	if tasks[0].Actions[0].Agent != "memo" {
+		t.Fatalf("action = %+v", tasks[0].Actions[0])
+	}
+	second, created, err := store.EnsureJob(ctx, record.Start{
+		Flow: "review", Owner: "aivara-se", Repo: "dispatch", Number: 212,
+		Key: "212-momo", Agent: "momo", Task: "review",
+	})
+	if err != nil {
+		t.Fatalf("a second agent's job: %v", err)
+	}
+	if !created || second.ID == job.ID || second.Agent != "momo" {
+		t.Fatalf("second job = %+v, created = %v", second, created)
+	}
+}
+
+func TestOpenRefusesANewerRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	store, err := record.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 99`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = record.Open(path)
+	if err == nil {
+		t.Fatal("a newer record opened")
+	}
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "99") || !strings.Contains(err.Error(), "2") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("the refused open removed the record: %v", statErr)
+	}
+}
+
+func TestOpenRaisesTheVersionOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	for i := 0; i < 2; i++ {
+		store, err := record.Open(path)
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		db, err := sql.Open("sqlite", "file:"+path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var version int
+		if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		db.Close()
+		if version != record.SchemaVersion {
+			t.Fatalf("version = %d, want %d", version, record.SchemaVersion)
+		}
+	}
 }

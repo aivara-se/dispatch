@@ -11,7 +11,7 @@ This directory is an example; a deployment brings its own. The `review` flow her
 - `key_path` — the path to the App's private key; the engine reads it at boot and never logs it.
 - `repos` — the repositories the engine serves: `owner/*` or `owner/name`.
 - `hermes` — the absolute path to the Hermes binary.
-- `agents` — a name and the Hermes profile that runs it.
+- `agents` — a name, the GitHub login that wakes it, and the Hermes profile that runs it. `login` is required and held by one agent.
 
 `flows/<name>.json`
 
@@ -21,6 +21,7 @@ This directory is an example; a deployment brings its own. The `review` flow her
 - `_start_.next` — the delivery that starts a job.
 - A task has `actions`, a `limit`, and `next`. `limit.turn` is how many times the task may run in one job; `limit.time` is the task's whole budget, in seconds, and the engine kills a running action when it runs out. `_start_` is special: it has only `next`.
 - `next` maps a condition to a task, or to `_done_`, which ends the job as a success.
+- `key` and a prompt action's `agent` may hold `{agent}`, the agent a login condition named.
 - A prompt action's `text` uses `{pr.url}`, the pull request's URL.
 
 ## Actions

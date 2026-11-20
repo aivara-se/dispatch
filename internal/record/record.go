@@ -41,9 +41,14 @@ const (
 // ErrNotFound reports a job the record does not hold.
 var ErrNotFound = errors.New("not found")
 
+// SchemaVersion is the record's shape. A process whose own version is older
+// than the file's stops at boot instead of reading a shape it does not know.
+const SchemaVersion = 2
+
 // Store is the open record.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // Delivery is one verified GitHub delivery kept for deduplication.
@@ -63,6 +68,7 @@ type Start struct {
 	Repo   string
 	Number int
 	Key    string
+	Agent  string
 	Title  string
 	Link   string
 	Task   string
@@ -76,6 +82,7 @@ type Job struct {
 	Repo      string
 	Number    int
 	Key       string
+	Agent     string
 	Title     string
 	Link      string
 	Alert     string
@@ -139,7 +146,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{db: db, path: abs}
 	if err := store.migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -174,10 +181,11 @@ func (s *Store) RecordDelivery(ctx context.Context, d Delivery) error {
 	return err
 }
 
-// Job returns the job for a flow, repository and pull request number.
-func (s *Store) Job(ctx context.Context, flow, owner, repo string, number int) (*Job, error) {
-	return s.queryJob(ctx, jobColumns+` WHERE flow = ? AND owner = ? AND repo = ? AND number = ?`,
-		flow, owner, repo, number)
+// Job returns the job for a flow, repository, pull request number and agent.
+// A flow that starts once per pull request keeps its job under the empty agent.
+func (s *Store) Job(ctx context.Context, flow, owner, repo string, number int, agent string) (*Job, error) {
+	return s.queryJob(ctx, jobColumns+` WHERE flow = ? AND owner = ? AND repo = ? AND number = ? AND agent = ?`,
+		flow, owner, repo, number, agent)
 }
 
 // JobByKey returns the job a key names within a flow and repository.
@@ -230,11 +238,11 @@ func (s *Store) FlowCounts(ctx context.Context) (map[string]int, error) {
 func (s *Store) EnsureJob(ctx context.Context, start Start) (*Job, bool, error) {
 	now := stamp(time.Now())
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO jobs (flow, owner, repo, number, key, title, link, task, state, verdict, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (flow, owner, repo, number) DO NOTHING`,
-		start.Flow, start.Owner, start.Repo, start.Number, start.Key, start.Title, start.Link, start.Task,
-		StateStarted, VerdictPending, now, now)
+		`INSERT INTO jobs (flow, owner, repo, number, key, agent, title, link, task, state, verdict, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (flow, owner, repo, number, agent) DO NOTHING`,
+		start.Flow, start.Owner, start.Repo, start.Number, start.Key, start.Agent, start.Title, start.Link,
+		start.Task, StateStarted, VerdictPending, now, now)
 	if err != nil {
 		return nil, false, err
 	}
@@ -242,7 +250,7 @@ func (s *Store) EnsureJob(ctx context.Context, start Start) (*Job, bool, error) 
 	if err != nil {
 		return nil, false, err
 	}
-	job, err := s.Job(ctx, start.Flow, start.Owner, start.Repo, start.Number)
+	job, err := s.Job(ctx, start.Flow, start.Owner, start.Repo, start.Number, start.Agent)
 	if err != nil {
 		return nil, false, err
 	}
@@ -390,7 +398,7 @@ func (s *Store) queryJob(ctx context.Context, query string, args ...any) (*Job, 
 	var alert sql.NullString
 	var created, updated string
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key,
+		&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key, &job.Agent,
 		&job.Title, &job.Link, &alert, &job.Task, &job.TaskID, &job.State, &job.Verdict, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -415,7 +423,7 @@ func scanJobs(rows *sql.Rows) ([]Job, error) {
 		var alert sql.NullString
 		var created, updated string
 		if err := rows.Scan(
-			&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key,
+			&job.ID, &job.Flow, &job.Owner, &job.Repo, &job.Number, &job.Key, &job.Agent,
 			&job.Title, &job.Link, &alert, &job.Task, &job.TaskID, &job.State, &job.Verdict, &created, &updated); err != nil {
 			return nil, err
 		}
@@ -441,11 +449,21 @@ func stamp(t time.Time) string {
 }
 
 // jobFields is the column list every job read returns, in scan order.
-const jobFields = `id, flow, owner, repo, number, key, title, link, alert, task, task_id, state, verdict, created_at, updated_at`
+const jobFields = `id, flow, owner, repo, number, key, agent, title, link, alert, task, task_id, state, verdict, created_at, updated_at`
 
 const jobColumns = `SELECT ` + jobFields + ` FROM jobs`
 
+// migrate raises an older record to SchemaVersion. A record newer than this
+// build stops before a delivery can meet a shape it cannot read.
 func (s *Store) migrate() error {
+	version, err := s.version()
+	if err != nil {
+		return err
+	}
+	if version > SchemaVersion {
+		return fmt.Errorf("record %s: schema version %d, this build reads %d",
+			s.path, version, SchemaVersion)
+	}
 	for _, statement := range schema {
 		if _, err := s.db.Exec(statement); err != nil {
 			return fmt.Errorf("record: %w", err)
@@ -471,31 +489,110 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	return nil
+	if err := s.rebuildJobs(); err != nil {
+		return err
+	}
+	return s.setVersion(SchemaVersion)
 }
 
-func (s *Store) ensureColumn(table, name, decl string) error {
-	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+// version is the record's schema version. A file this build's migration has
+// not raised yet reads 0.
+func (s *Store) version() (int, error) {
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
+func (s *Store) setVersion(version int) error {
+	_, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, version))
+	return err
+}
+
+// rebuildJobs copies the jobs table when a job's identity predates the agent:
+// a unique constraint cannot be altered, so the table is rebuilt. The copy
+// keeps every row and every task, and a fresh record never enters it.
+func (s *Store) rebuildJobs() error {
+	agent, err := s.hasColumn("jobs", "agent")
+	if err != nil || agent {
+		return err
+	}
+	// A dropped parent table would cascade into its tasks, so the rebuild runs
+	// with foreign keys off; the pragma is a no-op inside a transaction.
+	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer s.db.Exec(`PRAGMA foreign_keys = ON`)
+
+	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
-	found := false
+	defer tx.Rollback()
+	for _, statement := range rebuild {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("record: rebuild jobs: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) hasColumn(table, name string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
 	for rows.Next() {
 		var cid int
 		var column, kind string
 		var notNull, primary int
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &column, &kind, &notNull, &dflt, &primary); err != nil {
-			rows.Close()
-			return err
+			return false, err
 		}
 		if column == name {
-			found = true
+			return true, nil
 		}
 	}
-	rows.Close()
-	if found {
-		return nil
+	return false, rows.Err()
+}
+
+// rebuild copies the jobs table into a shape that carries the agent, then
+// renames it into place.
+var rebuild = []string{
+	`CREATE TABLE jobs_rebuild (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		flow TEXT NOT NULL,
+		owner TEXT NOT NULL,
+		repo TEXT NOT NULL,
+		number INTEGER NOT NULL,
+		key TEXT NOT NULL,
+		agent TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL DEFAULT '',
+		link TEXT NOT NULL DEFAULT '',
+		alert TEXT,
+		task TEXT NOT NULL DEFAULT '',
+		task_id INTEGER NOT NULL DEFAULT 0,
+		state TEXT NOT NULL,
+		verdict TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		UNIQUE (flow, owner, repo, number, agent)
+	)`,
+	`INSERT INTO jobs_rebuild
+		(id, flow, owner, repo, number, key, agent, title, link, alert, task, task_id, state, verdict, created_at, updated_at)
+		SELECT id, flow, owner, repo, number, key, '', title, link, alert, task, task_id, state, verdict, created_at, updated_at
+		FROM jobs`,
+	`DROP TABLE jobs`,
+	`ALTER TABLE jobs_rebuild RENAME TO jobs`,
+}
+
+func (s *Store) ensureColumn(table, name, decl string) error {
+	found, err := s.hasColumn(table, name)
+	if err != nil || found {
+		return err
 	}
 	_, err = s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + decl)
 	return err
@@ -518,6 +615,7 @@ var schema = []string{
 		repo TEXT NOT NULL,
 		number INTEGER NOT NULL,
 		key TEXT NOT NULL,
+		agent TEXT NOT NULL DEFAULT '',
 		title TEXT NOT NULL DEFAULT '',
 		link TEXT NOT NULL DEFAULT '',
 		alert TEXT,
@@ -527,7 +625,7 @@ var schema = []string{
 		verdict TEXT NOT NULL,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
-		UNIQUE (flow, owner, repo, number)
+		UNIQUE (flow, owner, repo, number, agent)
 	)`,
 	`CREATE TABLE IF NOT EXISTS tasks (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

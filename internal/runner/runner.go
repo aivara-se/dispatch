@@ -40,6 +40,7 @@ type identity struct {
 	owner  string
 	repo   string
 	number int
+	agent  string
 }
 
 // Runner runs jobs, one task at a time, one goroutine per job.
@@ -73,7 +74,7 @@ func New(store *record.Store, flows []config.Flow, configDir string, agents map[
 
 // Start runs a job in the background. A job already running is left alone.
 func (r *Runner) Start(job record.Job) {
-	id := identity{flow: job.Flow, owner: job.Owner, repo: job.Repo, number: job.Number}
+	id := identity{flow: job.Flow, owner: job.Owner, repo: job.Repo, number: job.Number, agent: job.Agent}
 	r.mu.Lock()
 	if _, ok := r.running[id]; ok {
 		r.mu.Unlock()
@@ -254,7 +255,7 @@ func (r *Runner) actions(ctx context.Context, job record.Job, task config.Task, 
 			return tools, false, ctx.Err()
 		}
 		actionID, err := r.store.BeginAction(ctx, current.ID, i, record.Action{
-			Type: action.Type, Agent: action.Agent, Text: action.Text,
+			Type: action.Type, Agent: agentOf(action, job), Text: action.Text,
 			Path: action.Path, Args: action.Args, Name: action.Name, Value: action.Value,
 		})
 		if err != nil {
@@ -283,7 +284,7 @@ func (r *Runner) actions(ctx context.Context, job record.Job, task config.Task, 
 			for j := i + 1; j < len(task.Actions); j++ {
 				next := task.Actions[j]
 				r.store.SkipAction(context.Background(), current.ID, j, record.Action{
-					Type: next.Type, Agent: next.Agent, Text: next.Text,
+					Type: next.Type, Agent: agentOf(next, job), Text: next.Text,
 					Path: next.Path, Args: next.Args, Name: next.Name, Value: next.Value,
 				})
 			}
@@ -296,9 +297,10 @@ func (r *Runner) actions(ctx context.Context, job record.Job, task config.Task, 
 func (r *Runner) action(ctx context.Context, job record.Job, action config.Action) (string, int, string, error) {
 	switch action.Type {
 	case "prompt":
-		profile, ok := r.agents[action.Agent]
+		agent := agentOf(action, job)
+		profile, ok := r.agents[agent]
 		if !ok {
-			return "", 1, "", fmt.Errorf("agent %q is not configured", action.Agent)
+			return "", 1, "", fmt.Errorf("agent %q is not configured", agent)
 		}
 		text := strings.ReplaceAll(action.Text, "{pr.url}", job.Link)
 		result, err := r.launch.Run(ctx, profile, text, job.Identity())
@@ -361,7 +363,7 @@ func (r *Runner) end(ctx context.Context, job record.Job) {
 // stop ends a job as blocked and writes the label the engine owns. It runs
 // before the state change, so a reader that sees blocked also sees the label.
 func (r *Runner) stop(ctx context.Context, job record.Job, alert string) {
-	current, err := r.store.Job(ctx, job.Flow, job.Owner, job.Repo, job.Number)
+	current, err := r.store.Job(ctx, job.Flow, job.Owner, job.Repo, job.Number, job.Agent)
 	if err != nil || current.State != record.StateStarted {
 		return
 	}
@@ -382,6 +384,15 @@ func (r *Runner) announce(job record.Job) {
 	if r.publish != nil {
 		r.publish(job.Flow, job.Owner, job.Repo, job.Key)
 	}
+}
+
+// agentOf resolves the agent an action names: the placeholder becomes the
+// agent whose login started this job.
+func agentOf(action config.Action, job record.Job) string {
+	if action.Agent == config.PlaceholderAgent {
+		return job.Agent
+	}
+	return action.Agent
 }
 
 func byID(rows []record.Task, id int64) *record.Task {

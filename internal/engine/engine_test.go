@@ -37,7 +37,10 @@ const dispatchFile = `{
   "key_path": "/tmp/app.pem",
   "repos": ["aivara-se/*"],
   "hermes": "/usr/local/bin/hermes",
-  "agents": { "memo": { "profile": "memo" } }
+  "agents": {
+    "memo": { "profile": "memo", "login": "memo-bot" },
+    "momo": { "profile": "momo", "login": "momo-bot" }
+  }
 }`
 
 const reviewFlow = `{
@@ -70,6 +73,30 @@ const auditFlow = `{
     "_start_": { "next": { "pr.created": "audit" } },
     "audit": {
       "actions": [],
+      "limit": { "turn": 1, "time": 60 },
+      "next": { "pr.merged": "_done_" }
+    }
+  }
+}`
+
+const reviewerFlow = `{
+  "key": "{n}-{agent}",
+  "tasks": {
+    "_start_": { "next": { "pr.review_requested": "review" } },
+    "review": {
+      "actions": [ { "type": "prompt", "agent": "{agent}", "text": "Review {pr.url}." } ],
+      "limit": { "turn": 1, "time": 60 },
+      "next": { "pr.approved": "_done_" }
+    }
+  }
+}`
+
+const assignFlow = `{
+  "key": "{n}-{agent}",
+  "tasks": {
+    "_start_": { "next": { "pr.assigned": "work" } },
+    "work": {
+      "actions": [ { "type": "prompt", "agent": "{agent}", "text": "Own {pr.url}." } ],
       "limit": { "turn": 1, "time": 60 },
       "next": { "pr.merged": "_done_" }
     }
@@ -148,7 +175,7 @@ func newHarnessWith(t *testing.T, flows map[string]string, labeler engine.Labele
 	}
 	mux := http.NewServeMux()
 	h := &harness{t: t, store: store, dbPath: dbPath, labeler: labeler}
-	h.handler = webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded, h.labeler, h.publish, h).Deliver)
+	h.handler = webhook.NewHandler(secret, engine.New(store, cfg.Repos, loaded, cfg.Agents, h.labeler, h.publish, h).Deliver)
 	mux.Handle(cfg.Path, h.handler)
 	server := httptest.NewServer(mux)
 	h.server = server
@@ -176,6 +203,7 @@ type delivery struct {
 	number       int
 	merged       bool
 	review       string
+	logins       []string
 	badSignature bool
 }
 
@@ -199,20 +227,46 @@ func (h *harness) post(d delivery) int {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 		PullRequest struct {
-			Number  int    `json:"number"`
-			Merged  bool   `json:"merged"`
-			Title   string `json:"title"`
-			HTMLURL string `json:"html_url"`
+			Number             int    `json:"number"`
+			Merged             bool   `json:"merged"`
+			Title              string `json:"title"`
+			HTMLURL            string `json:"html_url"`
+			RequestedReviewers []struct {
+				Login string `json:"login"`
+			} `json:"requested_reviewers,omitempty"`
 		} `json:"pull_request"`
 		Review *struct {
 			State string `json:"state"`
 		} `json:"review,omitempty"`
+		RequestedReviewer *struct {
+			Login string `json:"login"`
+		} `json:"requested_reviewer,omitempty"`
+		Assignee *struct {
+			Login string `json:"login"`
+		} `json:"assignee,omitempty"`
 	}{Action: d.action}
 	payload.Repository.FullName = d.owner + "/" + d.repo
 	payload.PullRequest.Number = d.number
 	payload.PullRequest.Merged = d.merged
 	payload.PullRequest.Title = "a title"
 	payload.PullRequest.HTMLURL = "https://github.com/" + d.owner + "/" + d.repo + "/pull/" + strconv.Itoa(d.number)
+	switch {
+	case d.action == "review_requested" && len(d.logins) > 0:
+		payload.RequestedReviewer = &struct {
+			Login string `json:"login"`
+		}{Login: d.logins[0]}
+	case d.action == "assigned" && len(d.logins) > 0:
+		payload.Assignee = &struct {
+			Login string `json:"login"`
+		}{Login: d.logins[0]}
+	case d.action == "opened":
+		for _, login := range d.logins {
+			payload.PullRequest.RequestedReviewers = append(payload.PullRequest.RequestedReviewers,
+				struct {
+					Login string `json:"login"`
+				}{Login: login})
+		}
+	}
 	if d.review != "" {
 		payload.Review = &struct {
 			State string `json:"state"`
@@ -263,9 +317,13 @@ func (h *harness) count(table string) int {
 	return n
 }
 
-func (h *harness) job(flow string) *record.Job {
+func (h *harness) job(flow string, agent ...string) *record.Job {
 	h.t.Helper()
-	job, err := h.store.Job(context.Background(), flow, "aivara-se", "dispatch", 212)
+	name := ""
+	if len(agent) > 0 {
+		name = agent[0]
+	}
+	job, err := h.store.Job(context.Background(), flow, "aivara-se", "dispatch", 212, name)
 	if err != nil {
 		h.t.Fatalf("job %s: %v", flow, err)
 	}
@@ -368,7 +426,7 @@ func TestReviewStartsOnlyTheFlowThatNamesIt(t *testing.T) {
 	if job.State != record.StateStarted || job.Key != "approve-212" {
 		t.Fatalf("approve job = %+v", job)
 	}
-	if _, err := h.store.Job(context.Background(), "review", "aivara-se", "dispatch", 212); !errors.Is(err, record.ErrNotFound) {
+	if _, err := h.store.Job(context.Background(), "review", "aivara-se", "dispatch", 212, ""); !errors.Is(err, record.ErrNotFound) {
 		t.Fatalf("review job error = %v", err)
 	}
 }
@@ -462,7 +520,7 @@ func TestReopenedRecordFindsTheJob(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer store.Close()
-	job, err := store.Job(context.Background(), "review", "aivara-se", "dispatch", 212)
+	job, err := store.Job(context.Background(), "review", "aivara-se", "dispatch", 212, "")
 	if err != nil {
 		t.Fatalf("job after reopen: %v", err)
 	}
@@ -542,4 +600,107 @@ func sign(key, body []byte) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestReviewRequestedWakesTheLoginAgent(t *testing.T) {
+	h := newHarness(t, map[string]string{"reviewer": reviewerFlow})
+	if status := h.post(delivery{action: "review_requested", logins: []string{"momo-bot"}, number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	job := h.job("reviewer", "momo")
+	if job.Key != "212-momo" || job.Agent != "momo" || job.Task != "review" {
+		t.Fatalf("job = %+v", job)
+	}
+	if job.State != record.StateStarted || job.Verdict != record.VerdictPending {
+		t.Fatalf("state = %s/%s", job.State, job.Verdict)
+	}
+	if len(h.started) != 1 || h.started[0] != "212-momo" {
+		t.Fatalf("started = %v", h.started)
+	}
+	if _, err := h.store.Job(context.Background(), "reviewer", "aivara-se", "dispatch", 212, ""); !errors.Is(err, record.ErrNotFound) {
+		t.Fatalf("a job under no agent: %v", err)
+	}
+}
+
+func TestTwoReviewersGetTwoJobs(t *testing.T) {
+	h := newHarness(t, map[string]string{"reviewer": reviewerFlow})
+	h.post(delivery{id: "d1", action: "review_requested", logins: []string{"momo-bot"}, number: 212})
+	h.post(delivery{id: "d2", action: "review_requested", logins: []string{"memo-bot"}, number: 212})
+	momo, memo := h.job("reviewer", "momo"), h.job("reviewer", "memo")
+	if momo.Key != "212-momo" || memo.Key != "212-memo" {
+		t.Fatalf("keys = %q, %q", momo.Key, memo.Key)
+	}
+	if jobs := h.count("jobs"); jobs != 2 {
+		t.Fatalf("jobs = %d", jobs)
+	}
+	if len(h.started) != 2 {
+		t.Fatalf("started = %v", h.started)
+	}
+}
+
+func TestOpenedWithReviewersWakesEach(t *testing.T) {
+	h := newHarness(t, map[string]string{"reviewer": reviewerFlow})
+	if status := h.post(delivery{action: "opened", logins: []string{"memo-bot", "momo-bot"}, number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs := h.count("jobs"); jobs != 2 {
+		t.Fatalf("jobs = %d", jobs)
+	}
+	if len(h.started) != 2 {
+		t.Fatalf("started = %v", h.started)
+	}
+}
+
+func TestAssignedWakesTheAssignee(t *testing.T) {
+	h := newHarness(t, map[string]string{"assign": assignFlow})
+	if status := h.post(delivery{action: "assigned", logins: []string{"memo-bot"}, number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	job := h.job("assign", "memo")
+	if job.Key != "212-memo" || job.Task != "work" {
+		t.Fatalf("job = %+v", job)
+	}
+	if len(h.started) != 1 || h.started[0] != "212-memo" {
+		t.Fatalf("started = %v", h.started)
+	}
+}
+
+func TestUnheldLoginStartsNothing(t *testing.T) {
+	h := newHarness(t, map[string]string{"reviewer": reviewerFlow})
+	if status := h.post(delivery{action: "review_requested", logins: []string{"stranger"}, number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 0 || deliveries != 0 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+func TestASecondRequestForOneAgentStartsOneJob(t *testing.T) {
+	h := newHarness(t, map[string]string{"reviewer": reviewerFlow})
+	h.post(delivery{id: "d1", action: "review_requested", logins: []string{"momo-bot"}, number: 212})
+	h.post(delivery{id: "d2", action: "review_requested", logins: []string{"momo-bot"}, number: 212})
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 1 || deliveries != 2 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+}
+
+// A crash between the job insert and the delivery's claim leaves a job and no
+// row, so the redelivery must find that job rather than start a second one.
+func TestCrashAfterTheJobInsertReplaysToTheSameJob(t *testing.T) {
+	h := newHarness(t, map[string]string{"reviewer": reviewerFlow})
+	if _, _, err := h.store.EnsureJob(context.Background(), record.Start{
+		Flow: "reviewer", Owner: "aivara-se", Repo: "dispatch", Number: 212,
+		Key: "212-momo", Agent: "momo", Task: "review", Title: "a title",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status := h.post(delivery{action: "review_requested", logins: []string{"momo-bot"}, number: 212}); status != http.StatusAccepted {
+		t.Fatalf("status = %d", status)
+	}
+	if jobs, deliveries := h.count("jobs"), h.count("deliveries"); jobs != 1 || deliveries != 1 {
+		t.Fatalf("jobs = %d, deliveries = %d", jobs, deliveries)
+	}
+	if len(h.started) != 0 {
+		t.Fatalf("the replay started a job again: %v", h.started)
+	}
 }

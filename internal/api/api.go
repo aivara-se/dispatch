@@ -213,6 +213,7 @@ type jobCard struct {
 	Owner   string  `json:"owner"`
 	Repo    string  `json:"repo"`
 	Key     string  `json:"key"`
+	Agent   string  `json:"agent,omitempty"`
 	Ref     string  `json:"ref"`
 	Title   string  `json:"title"`
 	State   string  `json:"state"`
@@ -257,6 +258,7 @@ func cardOf(job record.Job) jobCard {
 		Owner:   job.Owner,
 		Repo:    job.Repo,
 		Key:     job.Key,
+		Agent:   job.Agent,
 		Ref:     fmt.Sprintf("%s/%s#%d", job.Owner, job.Repo, job.Number),
 		Title:   job.Title,
 		State:   job.State,

@@ -34,11 +34,12 @@ func (r *Reader) Head(ctx context.Context, owner, repo string, number int) (stri
 	return pull.Head, nil
 }
 
-// Holds reports whether key holds, with the read that decided it. pr.created
-// is a delivery condition: after a task it never holds.
+// Holds reports whether key holds, with the read that decided it. pr.created,
+// pr.review_requested and pr.assigned are delivery conditions: after a task
+// they never hold.
 func (r *Reader) Holds(ctx context.Context, key, owner, repo string, number int, startHead string) (bool, json.RawMessage, error) {
 	switch key {
-	case "pr.created":
+	case "pr.created", "pr.review_requested", "pr.assigned":
 		return false, evidence(map[string]any{"key": key, "delivery": true}), nil
 	case "pr.merged":
 		pull, err := r.source.PullRequest(ctx, owner, repo, number)

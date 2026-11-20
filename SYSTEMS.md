@@ -8,7 +8,7 @@ One Go server, one Bun CLI, one SvelteKit web client.
 - **API** is read-only JSON over a Unix socket: the flows, one flow's jobs, one job, a stream and a health route.
 - **CLI and web client** read that socket; the client renders on its server, and the browser talks only to it.
 
-The server and the client are systemd units on the operator's host. The client runs as the server's user, because the socket is `0600`, listens on loopback, and the proxy sends `/dispatch*` to it.
+The server and the client are systemd units on the operator's host. The client runs as the server's user, because the socket is `0600`, listens on loopback, and answers at the host's root; the proxy sends it every path but the webhook's, which reaches the engine by four spellings (`005`).
 
 ## Dependencies
 

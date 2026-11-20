@@ -1,0 +1,15 @@
+{
+  "key": "{n}",
+  "tasks": {
+    "_start_": {
+      "next": { "pr.rejected": "correct" }
+    },
+    "correct": {
+      "actions": [
+        { "type": "prompt", "agent": "meme", "text": "Correct the changes requested on pull request {pr.url}. Read every thread, then push the corrections to the head." }
+      ],
+      "limit": { "turn": 1, "time": 1800 },
+      "next": { "pr.updated": "_done_" }
+    }
+  }
+}

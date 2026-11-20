@@ -1,29 +1,15 @@
 {
-  "key": "{n}",
+  "key": "{n}-{agent}",
   "tasks": {
     "_start_": {
-      "next": { "pr.created": "review" }
+      "next": { "pr.review_requested": "review" }
     },
     "review": {
       "actions": [
-        { "type": "prompt", "agent": "momo", "text": "Review pull request {pr.url}. Read the diff and the description, then leave one review, approved or with requested changes." }
+        { "type": "prompt", "agent": "{agent}", "text": "Review pull request {pr.url}. Read the diff and the description, then leave one review, approved or with requested changes." }
       ],
       "limit": { "turn": 10, "time": 1800 },
-      "next": { "pr.approved": "merge", "pr.rejected": "correct" }
-    },
-    "correct": {
-      "actions": [
-        { "type": "prompt", "agent": "meme", "text": "Correct the changes requested on pull request {pr.url}. Read every thread, then push the corrections to the head." }
-      ],
-      "limit": { "turn": 1, "time": 1800 },
-      "next": { "pr.updated": "review" }
-    },
-    "merge": {
-      "actions": [
-        { "type": "prompt", "agent": "meme", "text": "Merge pull request {pr.url} through the queue." }
-      ],
-      "limit": { "turn": 1, "time": 1800 },
-      "next": { "pr.merged": "_done_" }
+      "next": { "pr.approved": "_done_", "pr.rejected": "_done_" }
     }
   }
 }

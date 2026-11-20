@@ -323,7 +323,7 @@ func loadFlow(path string, cfg *Config) (Flow, error) {
 			perRequest = true
 		}
 	}
-	// A start names logins or none (docs/adrs/039). On a delivery that proves
+	// A start names logins or none (docs/adrs/002). On a delivery that proves
 	// both, the first key would start a job with no agent in a flow written
 	// for one, and the agent would never wake.
 	if perLogin && perRequest {

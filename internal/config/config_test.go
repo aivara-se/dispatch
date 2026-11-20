@@ -73,7 +73,7 @@ func TestLoadAcceptsTheExample(t *testing.T) {
 		t.Fatalf("limit = %+v", got)
 	}
 	// merge and correct run once per pull request, so each starts on a pull
-	// request condition and takes no agent (docs/adrs/038).
+	// request condition and takes no agent (docs/adrs/003).
 	for _, name := range []string{"correct", "merge"} {
 		flow, ok := byName[name]
 		if !ok || flow.Key != "{n}" {

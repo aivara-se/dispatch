@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -452,7 +453,8 @@ func TestOpenRefusesANewerRecord(t *testing.T) {
 	if err == nil {
 		t.Fatal("a newer record opened")
 	}
-	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "99") || !strings.Contains(err.Error(), "2") {
+	if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "99") ||
+		!strings.Contains(err.Error(), strconv.Itoa(record.SchemaVersion)) {
 		t.Fatalf("error = %v", err)
 	}
 	if _, statErr := os.Stat(path); statErr != nil {
@@ -481,6 +483,66 @@ func TestOpenRaisesTheVersionOnce(t *testing.T) {
 		db.Close()
 		if version != record.SchemaVersion {
 			t.Fatalf("version = %d, want %d", version, record.SchemaVersion)
+		}
+	}
+}
+
+// A record written before the close path wrote a verdict carries done and
+// pending together. Opening it applies ADR 036 to those rows and to nothing
+// else.
+func TestOpenRepairsDonePending(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			flow TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+			key TEXT NOT NULL, agent TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '', link TEXT NOT NULL DEFAULT '', alert TEXT,
+			task TEXT NOT NULL DEFAULT '', task_id INTEGER NOT NULL DEFAULT 0,
+			state TEXT NOT NULL, verdict TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+			UNIQUE (flow, owner, repo, number, agent))`,
+		`INSERT INTO jobs (flow, owner, repo, number, key, state, verdict, created_at, updated_at) VALUES
+			('review', 'aivara-se', 'dispatch', 194, '194', 'done', 'pending', '2026-11-19T16:58:00Z', '2026-11-19T17:10:00Z'),
+			('review', 'aivara-se', 'dispatch', 195, '195', 'blocked', 'failed', '2026-11-19T17:27:00Z', '2026-11-19T17:36:00Z'),
+			('review', 'aivara-se', 'dispatch', 196, '196', 'started', 'pending', '2026-11-19T17:35:00Z', '2026-11-19T17:35:00Z'),
+			('review', 'aivara-se', 'dispatch', 197, '197', 'done', 'passed', '2026-11-19T17:42:00Z', '2026-11-19T17:47:00Z')`,
+		`PRAGMA user_version = 2`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("%v: %v", err, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := record.Open(path)
+	if err != nil {
+		t.Fatalf("open a version 2 record: %v", err)
+	}
+	defer store.Close()
+
+	want := map[int][2]string{
+		194: {record.StateDone, record.VerdictPassed},
+		195: {record.StateBlocked, record.VerdictFailed},
+		196: {record.StateStarted, record.VerdictPending},
+		197: {record.StateDone, record.VerdictPassed},
+	}
+	for number, pair := range want {
+		job, err := store.Job(ctx, "review", "aivara-se", "dispatch", number, "")
+		if err != nil {
+			t.Fatalf("job %d: %v", number, err)
+		}
+		if job.State != pair[0] || job.Verdict != pair[1] {
+			t.Fatalf("job %d = %s/%s, want %s/%s", number, job.State, job.Verdict, pair[0], pair[1])
+		}
+		if number == 194 && job.UpdatedAt.Format("2006-01-02T15:04:05Z") != "2026-11-19T17:10:00Z" {
+			t.Fatalf("the repair moved updated_at to %s", job.UpdatedAt)
 		}
 	}
 }

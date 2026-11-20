@@ -488,8 +488,8 @@ func TestOpenRaisesTheVersionOnce(t *testing.T) {
 }
 
 // A record written before the close path wrote a verdict carries done and
-// pending together. Opening it applies ADR 001 to those rows and to nothing
-// else.
+// pending together, and the task that close killed still reads as running.
+// Opening it applies ADR 001 to those rows and to nothing else.
 func TestOpenRepairsDonePending(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "dispatch.db")
@@ -511,6 +511,19 @@ func TestOpenRepairsDonePending(t *testing.T) {
 			('review', 'aivara-se', 'dispatch', 195, '195', 'blocked', 'failed', '2026-11-19T17:27:00Z', '2026-11-19T17:36:00Z'),
 			('review', 'aivara-se', 'dispatch', 196, '196', 'started', 'pending', '2026-11-19T17:35:00Z', '2026-11-19T17:35:00Z'),
 			('review', 'aivara-se', 'dispatch', 197, '197', 'done', 'passed', '2026-11-19T17:42:00Z', '2026-11-19T17:47:00Z')`,
+		`CREATE TABLE tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id INTEGER NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			n INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			started_at TEXT,
+			ended_at TEXT,
+			UNIQUE (job_id, n))`,
+		`INSERT INTO tasks (job_id, name, n, state, started_at, ended_at) VALUES
+			(1, 'review', 1, 'running', '2026-11-19T16:00:00Z', NULL),
+			(1, 'review', 2, 'done', '2026-11-19T16:20:00Z', '2026-11-19T16:30:00Z'),
+			(3, 'review', 1, 'running', '2026-11-19T17:35:00Z', NULL)`,
 		`PRAGMA user_version = 2`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -525,7 +538,6 @@ func TestOpenRepairsDonePending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open a version 2 record: %v", err)
 	}
-	defer store.Close()
 
 	want := map[int][2]string{
 		194: {record.StateDone, record.VerdictPassed},
@@ -543,6 +555,111 @@ func TestOpenRepairsDonePending(t *testing.T) {
 		}
 		if number == 194 && job.UpdatedAt.Format("2006-01-02T15:04:05Z") != "2026-11-19T17:10:00Z" {
 			t.Fatalf("the repair moved updated_at to %s", job.UpdatedAt)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tasks := map[[2]int][2]string{
+		{1, 1}: {record.TaskInterrupted, "2026-11-19T17:10:00Z"},
+		{1, 2}: {record.TaskDone, "2026-11-19T16:30:00Z"},
+		{3, 1}: {record.TaskRunning, ""},
+	}
+	assertTasks(t, path, tasks)
+}
+
+// The version 3 open passed the done jobs and left their tasks running. A
+// record in that shape is repaired too: the task ends under any ended job.
+func TestOpenRepairsATaskUnderAnEndedJob(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dispatch.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE jobs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			flow TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, number INTEGER NOT NULL,
+			key TEXT NOT NULL, agent TEXT NOT NULL DEFAULT '',
+			title TEXT NOT NULL DEFAULT '', link TEXT NOT NULL DEFAULT '', alert TEXT,
+			task TEXT NOT NULL DEFAULT '', task_id INTEGER NOT NULL DEFAULT 0,
+			state TEXT NOT NULL, verdict TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+			UNIQUE (flow, owner, repo, number, agent))`,
+		`INSERT INTO jobs (flow, owner, repo, number, key, state, verdict, created_at, updated_at) VALUES
+			('review', 'aivara-se', 'dispatch', 202, '202', 'done', 'passed', '2026-11-20T06:44:56Z', '2026-11-20T07:22:13Z'),
+			('review', 'aivara-se', 'dispatch', 196, '196', 'blocked', 'failed', '2026-11-19T16:35:07Z', '2026-11-19T16:47:27Z'),
+			('review', 'aivara-se', 'dispatch-test', 1, '1', 'started', 'pending', '2026-11-19T15:33:44Z', '2026-11-19T15:33:44Z')`,
+		`CREATE TABLE tasks (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id INTEGER NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			n INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			started_at TEXT,
+			ended_at TEXT,
+			UNIQUE (job_id, n))`,
+		`INSERT INTO tasks (job_id, name, n, state, started_at, ended_at) VALUES
+			(1, 'merge', 4, 'running', '2026-11-20T07:20:06Z', NULL),
+			(2, 'review', 1, 'running', '2026-11-19T16:35:08Z', NULL),
+			(3, 'review', 1, 'running', '2026-11-19T15:33:45Z', NULL)`,
+		`PRAGMA user_version = 3`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("%v: %v", err, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := record.Open(path)
+	if err != nil {
+		t.Fatalf("open a version 3 record: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertTasks(t, path, map[[2]int][2]string{
+		{1, 4}: {record.TaskInterrupted, "2026-11-20T07:22:13Z"},
+		{2, 1}: {record.TaskInterrupted, "2026-11-19T16:47:27Z"},
+		{3, 1}: {record.TaskRunning, ""},
+	})
+}
+
+// assertTasks reads every task's state and end from the record on disk.
+func assertTasks(t *testing.T, path string, want map[[2]int][2]string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT job_id, n, state, ended_at FROM tasks ORDER BY job_id, n`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[[2]int][2]string{}
+	for rows.Next() {
+		var job, n int
+		var state string
+		var ended sql.NullString
+		if err := rows.Scan(&job, &n, &state, &ended); err != nil {
+			t.Fatal(err)
+		}
+		got[[2]int{job, n}] = [2]string{state, ended.String}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("tasks = %v, want %v", got, want)
+	}
+	for task, pair := range want {
+		if got[task] != pair {
+			t.Fatalf("task %v = %v, want %v", task, got[task], pair)
 		}
 	}
 }

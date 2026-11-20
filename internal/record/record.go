@@ -43,7 +43,7 @@ var ErrNotFound = errors.New("not found")
 
 // SchemaVersion is the record's shape. A process whose own version is older
 // than the file's stops at boot instead of reading a shape it does not know.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // Store is the open record.
 type Store struct {
@@ -492,11 +492,29 @@ func (s *Store) migrate() error {
 	if err := s.rebuildJobs(); err != nil {
 		return err
 	}
-	// A merged close ends its job passed (docs/adrs/001). Rows written before
-	// the close path wrote a verdict carry done and pending together: a pair
-	// no writer produces now, and one a reader cannot act on.
-	if _, err := s.db.Exec(`UPDATE jobs SET verdict = ? WHERE state = ? AND verdict = ?`,
+	// A merged close ends its job passed and interrupts each task it leaves
+	// running (docs/adrs/001). Rows written before the close path wrote a
+	// verdict carry done and pending together, and the task that close killed
+	// still reads as running: a pair no writer produces now, and one a reader
+	// cannot act on. The task ends where its job did, so ended_at holds the
+	// close the job's updated_at records. Both writes are one transaction, and
+	// the task gate reads the job's state, so rows the version 3 open already
+	// passed are repaired by the version 4 open too.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE tasks SET state = ?, ended_at = (SELECT updated_at FROM jobs WHERE id = tasks.job_id)
+		WHERE state = ? AND job_id IN (SELECT id FROM jobs WHERE state <> ?)`,
+		TaskInterrupted, TaskRunning, StateStarted); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE jobs SET verdict = ? WHERE state = ? AND verdict = ?`,
 		VerdictPassed, StateDone, VerdictPending); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	return s.setVersion(SchemaVersion)

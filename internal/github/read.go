@@ -2,9 +2,7 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -33,17 +31,20 @@ func (c *Client) PullRequest(ctx context.Context, owner, repo string, number int
 		Merged bool `json:"merged"`
 	}
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), number)
-	if err := c.read(ctx, owner, repo, path, &body); err != nil {
+	if err := c.read(ctx, owner, repo, http.MethodGet, path, nil, &body); err != nil {
 		return PullRequest{}, err
 	}
 	return PullRequest{Head: body.Head.SHA, Merged: body.Merged}, nil
 }
 
-// Reviews reads every review submitted on a pull request, oldest first.
+// Reviews reads every review submitted on a pull request, oldest first. A
+// pull request with more than ten thousand reviews is refused, so no read
+// runs without a bound.
 func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([]Review, error) {
 	const perPage = 100
+	const maxPages = 100
 	var reviews []Review
-	for page := 1; page <= 100; page++ {
+	for page := 1; page <= maxPages; page++ {
 		var body []struct {
 			User struct {
 				Login string `json:"login"`
@@ -54,7 +55,7 @@ func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([
 		}
 		path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews?per_page=%d&page=%d",
 			url.PathEscape(owner), url.PathEscape(repo), number, perPage, page)
-		if err := c.read(ctx, owner, repo, path, &body); err != nil {
+		if err := c.read(ctx, owner, repo, http.MethodGet, path, nil, &body); err != nil {
 			return nil, err
 		}
 		for _, review := range body {
@@ -69,33 +70,5 @@ func (c *Client) Reviews(ctx context.Context, owner, repo string, number int) ([
 			return reviews, nil
 		}
 	}
-	return nil, fmt.Errorf("github: %s/%s#%d: reviews exceed 100 pages", owner, repo, number)
-}
-
-func (c *Client) read(ctx context.Context, owner, repo, path string, out any) error {
-	ctx, cancel := c.bound(ctx)
-	defer cancel()
-	token, err := c.token(ctx, owner, repo)
-	if err != nil {
-		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	response, err := c.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("github: %s: %w", path, err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return fmt.Errorf("github: %s: %s", path, response.Status)
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out); err != nil {
-		return fmt.Errorf("github: %s: %w", path, err)
-	}
-	return nil
+	return nil, fmt.Errorf("github: %s/%s#%d: reviews exceed %d pages", owner, repo, number, maxPages)
 }

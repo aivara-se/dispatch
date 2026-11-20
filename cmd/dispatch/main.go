@@ -76,18 +76,11 @@ func run(args []string) error {
 	}
 	defer store.Close()
 
-	names := make([]string, 0, len(flows))
-	for _, flow := range flows {
-		names = append(names, flow.Name)
-	}
 	hub := api.NewHub()
-	profiles := make(map[string]string, len(cfg.Agents))
-	for name, agent := range cfg.Agents {
-		profiles[name] = agent.Profile
-	}
-	jobRunner := runner.New(store, flows, *configDir, profiles,
+	jobRunner := runner.New(store, flows, *configDir, profilesOf(cfg.Agents),
 		hermes.New(cfg.Hermes), condition.New(app), app, hub.Publish)
-	handler := webhook.NewHandler([]byte(secret), engine.New(store, cfg.Repos, flows, cfg.Agents, app, hub.Publish, jobRunner).Deliver)
+	handler := webhook.NewHandler([]byte(secret),
+		engine.New(store, cfg.Repos, flows, cfg.Agents, app, hub.Publish, jobRunner).Deliver)
 
 	webhookServer := &http.Server{
 		Addr:              cfg.Listen,
@@ -111,7 +104,7 @@ func run(args []string) error {
 		listener.Close()
 		return err
 	}
-	apiServer := &http.Server{Handler: api.New(store, names, hub).Handler()}
+	apiServer := &http.Server{Handler: api.New(store, flowNames(flows), hub).Handler()}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -146,8 +139,6 @@ func run(args []string) error {
 	if err := webhookServer.Shutdown(shutdown); err != nil {
 		return err
 	}
-	// Answering 202 queues the work, so a stop waits for the queue to apply
-	// before the record closes under it.
 	if err := handler.Wait(shutdown); err != nil {
 		return fmt.Errorf("deliveries at shutdown: %w", err)
 	}
@@ -155,8 +146,26 @@ func run(args []string) error {
 	return nil
 }
 
+// pathHandler serves the webhook handler under the one path GitHub posts to,
+// so the host root stays free for the client.
 func pathHandler(path string, handler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
 	return mux
+}
+
+func flowNames(flows []config.Flow) []string {
+	names := make([]string, 0, len(flows))
+	for _, flow := range flows {
+		names = append(names, flow.Name)
+	}
+	return names
+}
+
+func profilesOf(agents map[string]config.Agent) map[string]string {
+	profiles := make(map[string]string, len(agents))
+	for name, agent := range agents {
+		profiles[name] = agent.Profile
+	}
+	return profiles
 }

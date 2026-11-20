@@ -2,9 +2,130 @@ package record
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 )
+
+// A task's state: running, or ended as done, failed or interrupted.
+const (
+	TaskRunning     = "running"
+	TaskDone        = "done"
+	TaskFailed      = "failed"
+	TaskInterrupted = "interrupted"
+)
+
+// Task is one task of a job, with the actions it ran.
+type Task struct {
+	ID       int64
+	N        int
+	Short    string
+	State    string
+	Head     string
+	At       string
+	Actions  []Action
+	PC       string
+	Evidence string
+	Tools    string
+}
+
+// Action is one step a task ran.
+type Action struct {
+	Type    string
+	Agent   string
+	Text    string
+	Path    string
+	Args    []string
+	Name    string
+	Value   string
+	Output  string
+	Exit    *int
+	Skipped bool
+}
+
+// Tasks returns a job's tasks in order, each with its actions.
+func (s *Store) Tasks(ctx context.Context, jobID int64) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, n, name, state, head, started_at, pc, evidence, tools FROM tasks WHERE job_id = ? ORDER BY n`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	type row struct {
+		id   int64
+		task Task
+	}
+	var rowsOut []row
+	for rows.Next() {
+		var id int64
+		var task Task
+		var head, at, pc, evidence, tools sql.NullString
+		if err := rows.Scan(&id, &task.N, &task.Short, &task.State, &head, &at, &pc, &evidence, &tools); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		task.ID = id
+		task.Head = head.String
+		task.At = at.String
+		task.PC = pc.String
+		task.Evidence = evidence.String
+		task.Tools = tools.String
+		rowsOut = append(rowsOut, row{id: id, task: task})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	tasks := make([]Task, 0, len(rowsOut))
+	for _, item := range rowsOut {
+		actions, err := s.actions(ctx, item.id)
+		if err != nil {
+			return nil, err
+		}
+		item.task.Actions = actions
+		tasks = append(tasks, item.task)
+	}
+	return tasks, nil
+}
+
+func (s *Store) actions(ctx context.Context, taskID int64) ([]Action, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT type, agent, text, path, args, name, value, output, exit, skipped
+		 FROM actions WHERE task_id = ? ORDER BY ordinal`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var actions []Action
+	for rows.Next() {
+		var action Action
+		var agent, text, path, args, name, value, output sql.NullString
+		var exit sql.NullInt64
+		var skipped int
+		if err := rows.Scan(&action.Type, &agent, &text, &path, &args, &name, &value, &output, &exit, &skipped); err != nil {
+			return nil, err
+		}
+		action.Agent = agent.String
+		action.Text = text.String
+		action.Path = path.String
+		action.Name = name.String
+		action.Value = value.String
+		action.Output = output.String
+		action.Skipped = skipped == 1
+		if args.Valid && args.String != "" {
+			if err := json.Unmarshal([]byte(args.String), &action.Args); err != nil {
+				return nil, err
+			}
+		}
+		if exit.Valid {
+			value := int(exit.Int64)
+			action.Exit = &value
+		}
+		actions = append(actions, action)
+	}
+	return actions, rows.Err()
+}
 
 // SetTask points a job at its current task. A zero taskID means the next run
 // begins a new task row.

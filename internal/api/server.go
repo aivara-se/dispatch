@@ -7,69 +7,28 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/aivara-se/dispatch/internal/record"
 )
 
-// Event names a job that changed.
-type Event struct {
-	Flow  string `json:"flow"`
-	Owner string `json:"owner"`
-	Repo  string `json:"repo"`
-	Key   string `json:"key"`
-}
-
-// Hub fans a change out to every connected stream.
-type Hub struct {
-	mu   sync.Mutex
-	subs map[chan Event]struct{}
-}
-
-// NewHub returns an empty hub.
-func NewHub() *Hub {
-	return &Hub{subs: map[chan Event]struct{}{}}
-}
-
-// Publish sends one change to every subscriber. A slow subscriber drops it;
-// the next job fetch or a reconnect carries the current state.
-func (h *Hub) Publish(flow, owner, repo, key string) {
-	event := Event{Flow: flow, Owner: owner, Repo: repo, Key: key}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for ch := range h.subs {
-		select {
-		case ch <- event:
-		default:
-		}
-	}
-}
-
-func (h *Hub) subscribe() (<-chan Event, func()) {
-	ch := make(chan Event, 16)
-	h.mu.Lock()
-	h.subs[ch] = struct{}{}
-	h.mu.Unlock()
-	return ch, func() {
-		h.mu.Lock()
-		delete(h.subs, ch)
-		h.mu.Unlock()
-	}
-}
-
-// Server serves the record. It holds no state of its own beyond the hub.
+// Server serves the record over HTTP; the hub is its only mutable state.
 type Server struct {
-	store *record.Store
-	flows []string
-	hub   *Hub
+	store  *record.Store
+	flows  []string
+	served map[string]bool
+	hub    *Hub
 }
 
 // New returns the read-only HTTP handler for the configured flows.
 func New(store *record.Store, flows []string, hub *Hub) *Server {
 	names := append([]string(nil), flows...)
 	sort.Strings(names)
-	return &Server{store: store, flows: names, hub: hub}
+	served := make(map[string]bool, len(names))
+	for _, name := range names {
+		served[name] = true
+	}
+	return &Server{store: store, flows: names, served: served, hub: hub}
 }
 
 // Handler returns the routes.
@@ -106,7 +65,7 @@ func (s *Server) flowsList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 	flow := r.PathValue("flow")
-	if !s.known(flow) {
+	if !s.served[flow] {
 		writeError(w, http.StatusNotFound)
 		return
 	}
@@ -124,7 +83,7 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	flow := r.PathValue("flow")
-	if !s.known(flow) {
+	if !s.served[flow] {
 		writeError(w, http.StatusNotFound)
 		return
 	}
@@ -150,6 +109,8 @@ func (s *Server) job(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
+// stream sends every job's current state, then each change as it lands. A
+// client that falls behind refetches on its next event.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -169,7 +130,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, job := range jobs {
-		if !s.known(job.Flow) {
+		if !s.served[job.Flow] {
 			continue
 		}
 		sendEvent(w, flusher, Event{Flow: job.Flow, Owner: job.Owner, Repo: job.Repo, Key: job.Key})
@@ -197,120 +158,6 @@ func sendEvent(w http.ResponseWriter, flusher http.Flusher, event Event) {
 	}
 	fmt.Fprintf(w, "data: %s\n\n", body)
 	flusher.Flush()
-}
-
-func (s *Server) known(flow string) bool {
-	for _, name := range s.flows {
-		if name == flow {
-			return true
-		}
-	}
-	return false
-}
-
-type jobCard struct {
-	Flow    string  `json:"flow"`
-	Owner   string  `json:"owner"`
-	Repo    string  `json:"repo"`
-	Key     string  `json:"key"`
-	Agent   string  `json:"agent,omitempty"`
-	Ref     string  `json:"ref"`
-	Title   string  `json:"title"`
-	State   string  `json:"state"`
-	Verdict string  `json:"verdict"`
-	Cause   string  `json:"cause"`
-	Started string  `json:"started"`
-	Alert   *string `json:"alert"`
-	Link    string  `json:"link"`
-}
-
-type jobDetail struct {
-	jobCard
-	Tasks []taskView `json:"tasks"`
-}
-
-type taskView struct {
-	N        int             `json:"n"`
-	Short    string          `json:"short"`
-	At       string          `json:"at"`
-	Actions  []actionView    `json:"actions"`
-	PC       json.RawMessage `json:"pc"`
-	Evidence json.RawMessage `json:"evidence"`
-	Tools    json.RawMessage `json:"tools"`
-}
-
-type actionView struct {
-	Type    string   `json:"type"`
-	Output  *string  `json:"output"`
-	Exit    *int     `json:"exit"`
-	Skipped bool     `json:"skipped,omitempty"`
-	Agent   string   `json:"agent,omitempty"`
-	Text    string   `json:"text,omitempty"`
-	Path    string   `json:"path,omitempty"`
-	Args    []string `json:"args,omitempty"`
-	Name    string   `json:"name,omitempty"`
-	Value   string   `json:"value,omitempty"`
-}
-
-func cardOf(job record.Job) jobCard {
-	card := jobCard{
-		Flow:    job.Flow,
-		Owner:   job.Owner,
-		Repo:    job.Repo,
-		Key:     job.Key,
-		Agent:   job.Agent,
-		Ref:     fmt.Sprintf("%s/%s#%d", job.Owner, job.Repo, job.Number),
-		Title:   job.Title,
-		State:   job.State,
-		Verdict: job.Verdict,
-		Cause:   job.UpdatedAt.Format(time.RFC3339),
-		Started: job.CreatedAt.Format(time.RFC3339),
-		Link:    job.Link,
-	}
-	if job.Alert != "" {
-		alert := job.Alert
-		card.Alert = &alert
-	}
-	return card
-}
-
-func taskOf(task record.Task) taskView {
-	view := taskView{
-		N:        task.N,
-		Short:    task.Short,
-		At:       task.At,
-		Actions:  make([]actionView, 0, len(task.Actions)),
-		PC:       raw(task.PC),
-		Evidence: raw(task.Evidence),
-		Tools:    raw(task.Tools),
-	}
-	for _, action := range task.Actions {
-		item := actionView{Type: action.Type, Exit: action.Exit, Skipped: action.Skipped}
-		if action.Output != "" {
-			output := action.Output
-			item.Output = &output
-		}
-		switch action.Type {
-		case "prompt":
-			item.Agent = action.Agent
-			item.Text = action.Text
-		case "script":
-			item.Path = action.Path
-			item.Args = action.Args
-		case "action":
-			item.Name = action.Name
-			item.Value = action.Value
-		}
-		view.Actions = append(view.Actions, item)
-	}
-	return view
-}
-
-func raw(text string) json.RawMessage {
-	if text == "" || !json.Valid([]byte(text)) {
-		return nil
-	}
-	return json.RawMessage(text)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

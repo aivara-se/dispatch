@@ -1,5 +1,6 @@
 // Package github is the engine's one App client: it mints an installation
-// token for a repository and writes the blocked label. It makes no other call.
+// token for a repository, reads the pull request a condition asks about, and
+// writes the blocked label. It makes no other call.
 package github
 
 import (
@@ -82,38 +83,8 @@ func New(appID int64, keyPEM []byte, baseURL string, httpClient *http.Client) (*
 	}, nil
 }
 
-// Block adds the blocked label to a pull request through an installation
-// token. An error names the status and never the token.
-func (c *Client) Block(ctx context.Context, owner, repo string, number int) error {
-	ctx, cancel := c.bound(ctx)
-	defer cancel()
-	token, err := c.token(ctx, owner, repo)
-	if err != nil {
-		return err
-	}
-	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels",
-		url.PathEscape(owner), url.PathEscape(repo), number)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path,
-		bytes.NewReader([]byte(`{"labels":["blocked"]}`)))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("github: label %s/%s#%d: %w", owner, repo, number, err)
-	}
-	defer response.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return fmt.Errorf("github: label %s/%s#%d: %s", owner, repo, number, response.Status)
-	}
-	return nil
-}
-
+// token returns an installation token for a repository, minted once and kept
+// until it is two minutes from expiry.
 func (c *Client) token(ctx context.Context, owner, repo string) (string, error) {
 	name := owner + "/" + repo
 	c.mu.Lock()
@@ -144,7 +115,7 @@ func (c *Client) installation(ctx context.Context, signed, owner, repo string) (
 	var body struct {
 		ID int64 `json:"id"`
 	}
-	if err := c.call(ctx, http.MethodGet, path, signed, &body); err != nil {
+	if err := c.app(ctx, http.MethodGet, path, signed, &body); err != nil {
 		return 0, err
 	}
 	if body.ID == 0 {
@@ -159,7 +130,7 @@ func (c *Client) createToken(ctx context.Context, signed string, installation in
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
-	if err := c.call(ctx, http.MethodPost, path, signed, &body); err != nil {
+	if err := c.app(ctx, http.MethodPost, path, signed, &body); err != nil {
 		return "", time.Time{}, err
 	}
 	if body.Token == "" {
@@ -168,16 +139,47 @@ func (c *Client) createToken(ctx context.Context, signed string, installation in
 	return body.Token, body.ExpiresAt, nil
 }
 
-func (c *Client) call(ctx context.Context, method, path, signed string, out any) error {
-	ctx, cancel := c.bound(ctx)
+// app sends one call signed as the App itself.
+func (c *Client) app(ctx context.Context, method, path, jwt string, out any) error {
+	return c.bound(ctx, func(ctx context.Context) error {
+		return c.send(ctx, method, path, jwt, nil, out)
+	})
+}
+
+// read sends one call on a repository's installation token.
+func (c *Client) read(ctx context.Context, owner, repo, method, path string, body []byte, out any) error {
+	return c.bound(ctx, func(ctx context.Context) error {
+		token, err := c.token(ctx, owner, repo)
+		if err != nil {
+			return err
+		}
+		return c.send(ctx, method, path, token, body, out)
+	})
+}
+
+// bound runs one call inside the client's per-request timeout, so no call to
+// GitHub can outlive it.
+func (c *Client) bound(ctx context.Context, call func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, method, c.base+path, nil)
+	return call(ctx)
+}
+
+func (c *Client) send(ctx context.Context, method, path, token string, body []byte, out any) error {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+signed)
+	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("github: %s: %w", path, err)
@@ -187,13 +189,11 @@ func (c *Client) call(ctx context.Context, method, path, signed string, out any)
 		io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
 		return fmt.Errorf("github: %s: %s", path, response.Status)
 	}
+	if out == nil {
+		io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
+		return nil
+	}
 	return json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(out)
-}
-
-// bound returns a context that ends after the per-request timeout, so no call
-// to GitHub can outlive it.
-func (c *Client) bound(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, c.Timeout)
 }
 
 // jwt signs the App claims GitHub accepts for ten minutes.

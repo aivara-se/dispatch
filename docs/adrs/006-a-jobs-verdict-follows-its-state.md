@@ -1,4 +1,4 @@
-# 041 A job's verdict follows its state
+# 006 A job's verdict follows its state
 
 ## Context
 
@@ -19,4 +19,4 @@ The repair for those rows is `207`. It does not remove the class: `verdict` hold
 - The pair cannot disagree again, so no reader meets "finished, outcome unknown" for a job that ended.
 - The `207` repair becomes a version step: its `UPDATE` is deleted with the column, and a record still at the earlier version is repaired once.
 - A stored pair leaves the schema, so a record from an older version is rebuilt once and its rows keep the verdict its state gives them.
-- A job that stops `blocked` on a pull request that later merges still reads `failed`: the record is the engine's decision at the time it stopped, not the pull request's later state. `036`'s "a merged close ends every started job done with verdict passed" holds, and the close now writes the state alone.
+- A job that stops `blocked` on a pull request that later merges still reads `failed`: the record is the engine's decision at the time it stopped, not the pull request's later state. `001`'s "A merged pull request ends its jobs `done`" holds, and the close now writes the state alone.

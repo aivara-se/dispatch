@@ -172,8 +172,12 @@ test("a pull request with no job is an empty list, not an error", async () => {
 })
 
 test("a number that is not one is a 400", async () => {
-  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/latest`)
-  expect(response.status).toBe(400)
+  // `Number` reads the middle three as integers, so the digits are checked
+  // first: a typo must not answer as a different pull request.
+  for (const bad of ["latest", "1e3", "%2012%20", "0x10", "0", "1.5", "212x"]) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/${bad}`)
+    expect(`${bad}: ${response.status}`).toBe(`${bad}: 400`)
+  }
 })
 
 test("a flow with no jobs says so", async () => {

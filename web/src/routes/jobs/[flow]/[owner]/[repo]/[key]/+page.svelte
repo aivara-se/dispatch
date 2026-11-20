@@ -1,23 +1,34 @@
 <script lang="ts">
   import { age, hhmm } from '$lib/age'
-  import type { Action } from '$lib/types'
+  import Icon from '$lib/Icon.svelte'
+  import type { Action, Task } from '$lib/types'
   import { pick } from '$lib/selection'
 
   let { data } = $props()
 
   let job = $derived(data.job)
-  let failing = $derived(job.tasks.length > 0 ? job.tasks[job.tasks.length - 1].n : null)
   let id = $derived(`${job.flow}/${job.owner}/${job.repo}/${job.key}`)
+  let open = $derived(job.state === 'blocked' && job.tasks.length > 0 ? job.tasks[job.tasks.length - 1].n : (job.tasks[0]?.n ?? 0))
   let picked = $state<{ id: string; n: number } | null>(null)
-  let current = $derived(pick(picked, id, failing))
+  let current = $derived(pick(picked, id, open))
   let task = $derived(job.tasks.find((item) => item.n === current))
 
+  const faces = ['meme', 'momo', 'mama', 'mimi']
+  const agent = (item: Task) => item.actions.find((action) => action.type === 'prompt' && action.agent)?.agent ?? ''
+  const face = (item: Task) => {
+    const name = agent(item).toLowerCase()
+    return faces.includes(name) ? name : null
+  }
   const carried = (action: Action) =>
     action.type === 'script'
       ? [action.path, ...(action.args ?? [])].join(' ')
       : action.type === 'action'
         ? [action.name, action.value].filter(Boolean).join(' ')
         : (action.text ?? '')
+  const exitOf = (action: Action) =>
+    action.exit === 0 ? 'exit 0' : action.exit === null ? 'skipped' : `exit ${action.exit}`
+  const toneOf = (action: Action) =>
+    action.exit === 0 ? undefined : action.exit === null ? 'skip' : '1'
 </script>
 
 <svelte:head>
@@ -26,61 +37,58 @@
 
 <div class="ihead">
   <div class="ref">
-    <span class="flowlab">{job.flow}</span>
     <a href={job.link} target="_blank" rel="noreferrer">{job.ref}</a>
+    <span class="flowlab">{job.flow}</span>
   </div>
   <h1>{job.title}</h1>
-  <p class="cause">
-    <span class="state {job.state}">{job.state}</span>
-    <span class="sep">·</span>{job.verdict}
-    <span class="sep">·</span>{age(job.cause)}
-  </p>
 </div>
 
 {#if job.alert}
-  <div class="alert"><b>Alert:</b><span>{job.alert}</span></div>
+  <p class="alert">
+    <Icon name="alert" />
+    <span><b>{job.state}.</b> {job.alert}</span>
+  </p>
 {/if}
 
 <div class="body">
-  <nav class="tasks" aria-label="Tasks">
+  <div class="tasks">
+    <div class="stats">
+      <div class="stat"><span class="lab">time</span><span class="v">{age(job.started, Date.parse(job.cause))}</span></div>
+      <div class="stat"><span class="lab">verdict</span><span class="v">{job.verdict}</span></div>
+    </div>
     {#each job.tasks as item}
       <button
         class="task"
-        class:current={item.n === current}
-        class:failing={item.n === failing && job.state === 'blocked'}
-        aria-current={item.n === current}
+        aria-pressed={item.n === current}
         onclick={() => (picked = { id, n: item.n })}
       >
-        <span class="n">{item.n}</span>
-        <span class="short">{item.short}</span>
-        <span class="at">{hhmm(item.at)}{#if item.n === failing && job.state === 'blocked'} · <span class="failed">failed</span>{/if}</span>
+        <span class="av" class:empty={!face(item)}>
+          {#if face(item)}<img src="/agents/{face(item)}.jpg" alt={agent(item)} title={agent(item)} />{/if}
+        </span>
+        <span class="tc">
+          <span class="t1"><span class="name">{item.short}</span><span class="dur">{hhmm(item.at)}</span></span>
+        </span>
       </button>
     {/each}
-  </nav>
-
-  <div class="actions">
-    {#if task}
-      <section class:failing={task.n === failing && job.state === 'blocked'}>
-        <h2>Task {task.n} <span class="dim">· {task.short}</span></h2>
-        {#each task.actions as action}
-          <article class="action">
-            <div class="ahead">
-              <span class="type">{action.type}{#if action.agent}<span class="dim"> · {action.agent}</span>{/if}</span>
-              <span class="exit" class:failed={action.exit !== null && action.exit !== 0}>
-                {action.exit === null ? 'not run' : action.exit === 0 ? 'exit 0' : `failed · exit ${action.exit}`}
-              </span>
-            </div>
-            {#if carried(action)}
-              <p class="carried" class:mono={action.type !== 'prompt'}>{carried(action)}</p>
-            {/if}
-            {#if action.skipped}
-              <p class="skipped">skipped</p>
-            {:else if action.output}
-              <pre>{action.output}</pre>
-            {/if}
-          </article>
-        {/each}
-      </section>
-    {/if}
   </div>
+
+  <aside class="inspector" aria-label="Actions">
+    <div class="acts">
+      {#each task?.actions ?? [] as action}
+        <article class="act" data-exit={toneOf(action)}>
+          <div class="ah">
+            <span class="at">{action.type}</span>
+            {#if action.agent}<span class="aa">{action.agent}</span>{/if}
+            <span class="ax">{exitOf(action)}</span>
+          </div>
+          {#if carried(action)}
+            <div class="ab" class:code={action.type !== 'prompt'}>{carried(action)}</div>
+          {/if}
+          {#if action.output}
+            <div class="ao"><span class="k">output</span>{action.output}</div>
+          {/if}
+        </article>
+      {/each}
+    </div>
+  </aside>
 </div>

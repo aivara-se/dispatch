@@ -31,6 +31,7 @@ export type Card = {
   state: string
   verdict: string
   cause: string
+  started: string
   alert: string | null
   link: string
 }

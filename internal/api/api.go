@@ -218,6 +218,7 @@ type jobCard struct {
 	State   string  `json:"state"`
 	Verdict string  `json:"verdict"`
 	Cause   string  `json:"cause"`
+	Started string  `json:"started"`
 	Alert   *string `json:"alert"`
 	Link    string  `json:"link"`
 }
@@ -261,6 +262,7 @@ func cardOf(job record.Job) jobCard {
 		State:   job.State,
 		Verdict: job.Verdict,
 		Cause:   job.UpdatedAt.Format(time.RFC3339),
+		Started: job.CreatedAt.Format(time.RFC3339),
 		Link:    job.Link,
 	}
 	if job.Alert != "" {

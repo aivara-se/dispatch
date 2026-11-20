@@ -19,6 +19,7 @@ const card = (key: string, state: string, verdict: string, title: string) => ({
   state,
   verdict,
   cause,
+  started: cause,
   alert: null,
   link: `https://github.com/aivara-se/dispatch/pull/${key}`,
 })
@@ -110,7 +111,7 @@ test("the server renders the record before hydration", async () => {
   const html = await (await fetch(`http://127.0.0.1:${port}/jobs/review/aivara-se/dispatch/212`)).text()
   expect(html).toContain("review the engine spine")
   expect(html).toContain("read the record")
-  expect(html).toContain("failed · exit 1")
+  expect(html).toContain("exit 1")
   expect(html).toContain("label blocked")
   expect(html).toContain("read the failing task")
   expect(html).toContain("01:05")
@@ -120,15 +121,19 @@ test("the server renders the record before hydration", async () => {
 
 test("a blocked job opens on its failing task", async () => {
   const html = await (await fetch(`http://127.0.0.1:${port}/jobs/review/aivara-se/dispatch/212`)).text()
-  expect(html).toContain("Task 2")
-  expect(html).not.toContain("<pre>looks good</pre>")
+  expect(html).toContain("label blocked")
+  expect(html).not.toContain(">looks good<")
 })
 
-test("the flow page lists its jobs", async () => {
-  const html = await (await fetch(`http://127.0.0.1:${port}/flows/review`)).text()
-  expect(html).toContain("aivara-se/dispatch#212")
-  expect(html).toContain("dispatch#212")
-  expect(html).toContain("audit the socket")
+test("the flow page opens its first blocked job", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/flows/review`, { redirect: "manual" })
+  expect(response.status).toBe(302)
+  expect(response.headers.get("location")).toBe("/jobs/review/aivara-se/dispatch/212")
+})
+
+test("a flow with no jobs says so", async () => {
+  const html = await (await fetch(`http://127.0.0.1:${port}/flows/audit`)).text()
+  expect(html).toContain("This flow has no jobs.")
 })
 
 test("an unknown job is 404", async () => {

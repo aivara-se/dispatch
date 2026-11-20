@@ -1,8 +1,8 @@
-# 042 A review with no verdict still ends its task
+# 007 A review with no verdict still ends its task
 
 ## Context
 
-Two production jobs ended `blocked` and `failed` although the reviewer had submitted a review: momo's review on `dispatch#196` and on `.website#219` was `COMMENTED`. `029` says a comment is not a verdict and leaves the last one standing, so the review task's `next` — `pr.approved` and `pr.rejected` — held nowhere, and "any other stop fails the job" applied.
+Two production jobs ended `blocked` and `failed` although the reviewer had submitted a review: momo's review on `dispatch#196` and on `.website#219` was `COMMENTED`. `002` says a comment and a pending review leave the last verdict standing, so the review task's `next` — `pr.approved` and `pr.rejected` — held nowhere, and "any other stop fails the job" applied.
 
 The flow asks the reviewer for a verdict, and a review that only comments is a legitimate outcome the model allows. It has no branch. `_done_` cannot be reached on an agent's word, so the branch has to be a condition read on GitHub.
 
@@ -13,9 +13,12 @@ The flow asks the reviewer for a verdict, and a review that only comments is a l
 - A review flow names it as the branch for a review the two verdicts do not cover.
 - A `next` names it after `pr.approved` and `pr.rejected`, and the loader refuses a map that does not: an approval holds `pr.reviewed` too, so a map that reaches it first ends every approved review without merging.
 
+## What this overrides
+
+`002`'s "A `next` key is one of seven conditions" gains an eighth, `pr.reviewed`. Its "A comment and a pending review leave the last verdict standing" keeps its meaning, and the branch above stands beside it: the comment leaves the last verdict standing and is itself a condition that ends the task. `002`'s "`_start_` reads its keys on each delivery, and names only what a delivery proves" does not gain the key, so a `_start_.next` naming `pr.reviewed` fails the load.
+
 ## Consequences
 
 - A reviewer who comments ends the task `done` instead of failing the job, and a merge flow still waits for `pr.approved`.
-- The condition is pull request-level: a job can end on another reviewer's review of the same head, which is how `pr.approved` already behaves (`038`). The job's evidence names the head and the review states, not the reviewer.
+- The condition is pull request-level: a job can end on another reviewer's review of the same head, which is how `pr.approved` already behaves. The job's evidence names the head and the review states, not the reviewer.
 - Two of the three blocked rows on the first production record keep `blocked` and `failed`: the condition did not exist when they stopped, and a record of a stop is not rewritten. Their alert, `no condition holds`, is the record of the branch the flow lacked.
-- `029`'s closed set gains a key, and `035`'s list of start conditions does not: `pr.reviewed` is read after a task, so a `_start_.next` naming it fails the load.

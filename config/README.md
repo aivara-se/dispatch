@@ -1,6 +1,6 @@
 # Configuration
 
-This directory is an example; a deployment brings its own. The `review` flow here is an example, not part of Dispatch.
+This directory is an example; a deployment brings its own, flows included.
 
 `dispatch.json`
 
@@ -15,13 +15,13 @@ This directory is an example; a deployment brings its own. The `review` flow her
 
 `flows/<name>.json`
 
-- The file name is the flow name. `review` is an example; flows belong to the deployment, not to Dispatch.
+- The file name is the flow name. The flows here are examples; a deployment brings its own.
 - `key` — the job's last path segment; it must contain `{n}`, the pull request number, so two pull requests cannot share one.
 - `tasks` — `_start_` and one entry per task.
-- `_start_.next` — the delivery that starts a job.
+- `_start_.next` — the delivery that starts a job. It names login conditions or pull request conditions, never both; the loader refuses a mix.
 - A task has `actions`, a `limit`, and `next`. `limit.turn` is how many times the task may run in one job; `limit.time` is the task's whole budget, in seconds, and the engine kills a running action when it runs out. `_start_` is special: it has only `next`.
 - `next` maps a condition to a task, or to `_done_`, which ends the job as a success.
-- `key` and a prompt action's `agent` may hold `{agent}`, the agent a login condition named.
+- A flow whose `_start_.next` names a login condition carries `{agent}`, the agent the delivery named, in its `key`; its prompt actions may name `{agent}` as their agent. The loader refuses a login flow without `{agent}` in its key, and refuses `{agent}` in a flow whose start names no login.
 - A prompt action's `text` uses `{pr.url}`, the pull request's URL.
 
 ## Actions
@@ -32,4 +32,4 @@ This directory is an example; a deployment brings its own. The `review` flow her
 - `{ "type": "script", "path": "<file>", "args": ["..."] }` — an executable the engine runs. The path is relative to this `config/` directory.
 - `{ "type": "action", "name": "label", "value": "<label>" }` — an engine action. `label` is the only one now; the engine uses it to write `blocked` when a job stops.
 
-A job is `{flow}/{owner}/{repo}/{key}`, so the review flow's job reads `review/aivara-se/dispatch/212`. The conditions are in ADR [`029`](../docs/adrs/029-the-engine-reads-a-closed-condition-set.md).
+A job is `{flow}/{owner}/{repo}/{key}`, so the review flow's job reads `review/aivara-se/dispatch/212-momo`. The condition set is ADR [`029`](../docs/adrs/029-the-engine-reads-a-closed-condition-set.md), widened to seven by [`038`](../docs/adrs/038-a-delivery-wakes-the-agent-its-login-names.md): `pr.review_requested` and `pr.assigned` are proved by a delivery alone.

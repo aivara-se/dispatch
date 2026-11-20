@@ -124,6 +124,7 @@ test("the server renders the record before hydration", async () => {
 
 test("a task shows the tool calls it made", async () => {
   const html = await (await fetch(`http://127.0.0.1:${port}/jobs/review/aivara-se/dispatch/212`)).text()
+  expect(html).toContain('aria-label="Actions and tool calls"')
   expect(html).toContain("tool calls")
   expect(html).toContain("read_file")
   expect(html).toContain("internal/runner/runner.go")

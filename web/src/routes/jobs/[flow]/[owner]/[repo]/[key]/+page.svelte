@@ -74,7 +74,7 @@
     {/each}
   </div>
 
-  <aside class="inspector" aria-label="Actions">
+  <aside class="inspector" aria-label="Actions and tool calls">
     <div class="acts">
       {#each task?.actions ?? [] as action}
         <article class="act" data-exit={toneOf(action)}>

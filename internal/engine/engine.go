@@ -12,6 +12,7 @@ import (
 	"github.com/aivara-se/dispatch/internal/webhook"
 )
 
+// Labeler writes the blocked label for a pull request.
 type Labeler interface {
 	Block(ctx context.Context, owner, repo string, number int) error
 }

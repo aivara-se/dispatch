@@ -12,15 +12,18 @@ import (
 	"github.com/aivara-se/dispatch/internal/record"
 )
 
+// Launch runs one prompt action.
 type Launch interface {
 	Run(ctx context.Context, profile, text, key string) (hermes.Result, error)
 }
 
+// Conditions reads a task's next conditions.
 type Conditions interface {
 	Head(ctx context.Context, owner, repo string, number int) (string, error)
 	Holds(ctx context.Context, key, owner, repo string, number int, startHead string) (bool, json.RawMessage, error)
 }
 
+// Labeler writes the blocked label.
 type Labeler interface {
 	Block(ctx context.Context, owner, repo string, number int) error
 }

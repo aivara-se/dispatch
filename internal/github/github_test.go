@@ -98,6 +98,24 @@ func TestBlockReportsARejectedWrite(t *testing.T) {
 	}
 }
 
+func TestBlockKeepsATokenFailure(t *testing.T) {
+	_, keyPEM := newKey(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := github.New(123456, keyPEM, server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.Block(context.Background(), "aivara-se", "dispatch", 212)
+	want := "github: /repos/aivara-se/dispatch/installation: 404 Not Found"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
 func TestNewRefusesANonKey(t *testing.T) {
 	if _, err := github.New(1, []byte("not a key"), "", nil); err == nil {
 		t.Fatal("New accepted a non-key")

@@ -54,6 +54,7 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 
+// Close closes the record.
 func (s *Store) Close() error {
 	return s.db.Close()
 }
@@ -82,6 +83,9 @@ func (s *Store) migrate() error {
 	if err := s.rebuildJobs(); err != nil {
 		return err
 	}
+	// A merged close ends its job passed (docs/adrs/001), so rows written
+	// before the close path wrote a verdict carry done and pending together:
+	// a pair no writer produces now, and one a reader cannot act on.
 	if _, err := s.db.Exec(`UPDATE jobs SET verdict = ? WHERE state = ? AND verdict = ?`,
 		VerdictPassed, StateDone, VerdictPending); err != nil {
 		return err
@@ -90,9 +94,6 @@ func (s *Store) migrate() error {
 }
 
 // addedColumns are the columns a record written by an earlier build lacks.
-// A merged close ends its job passed (docs/adrs/001), so rows written before
-// the close path wrote a verdict carry done and pending together: a pair no
-// writer produces now, and one a reader cannot act on.
 var addedColumns = []struct {
 	table string
 	name  string

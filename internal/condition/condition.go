@@ -23,6 +23,7 @@ type Reader struct {
 	source Source
 }
 
+// New returns a reader over one GitHub client.
 func New(source Source) *Reader {
 	return &Reader{source: source}
 }

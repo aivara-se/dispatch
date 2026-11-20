@@ -16,6 +16,7 @@ type Hub struct {
 	subs map[chan Event]struct{}
 }
 
+// NewHub returns an empty hub.
 func NewHub() *Hub {
 	return &Hub{subs: map[chan Event]struct{}{}}
 }

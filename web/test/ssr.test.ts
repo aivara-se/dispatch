@@ -62,14 +62,21 @@ const cards = [
   card("210", "done", "passed", "land the cli"),
 ]
 
+let emptyReads = 0
+
 rmSync(socket, { force: true })
 const api = Bun.serve({
   unix: socket,
   fetch(request) {
     const path = new URL(request.url).pathname
-    if (path === "/v1/flows") return Response.json({ flows: [{ name: "review", jobs: 3 }, { name: "audit", jobs: 0 }] })
+    if (path === "/v1/flows")
+      return Response.json({ flows: [{ name: "review", jobs: 3 }, { name: "audit", jobs: 0 }, { name: "empty", jobs: 0 }] })
     if (path === "/v1/flows/review/jobs") return Response.json({ jobs: cards })
     if (path === "/v1/flows/audit/jobs") return Response.json({ jobs: [] })
+    if (path === "/v1/flows/empty/jobs") {
+      emptyReads++
+      return Response.json({ jobs: [] })
+    }
     if (path === "/v1/flows/review/jobs/aivara-se/dispatch/212") return Response.json(detail)
     if (path === "/v1/stream") {
       const body = new ReadableStream({
@@ -108,7 +115,9 @@ beforeAll(async () => {
 afterAll(() => {
   web?.kill()
   api.stop(true)
-  rmSync(socket, { force: true })
+  let emptyReads = 0
+
+rmSync(socket, { force: true })
 })
 
 test("the server renders the record before hydration", async () => {
@@ -144,18 +153,34 @@ test("the flow page opens its first blocked job", async () => {
   expect(response.headers.get("location")).toBe("/jobs/review/aivara-se/dispatch/212")
 })
 
-test("a flow's jobs are served as json, uncached", async () => {
-  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/review`)
+test("a pull request's jobs are served across flows, uncached", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/212`)
   expect(response.status).toBe(200)
   expect(response.headers.get("cache-control")).toBe("no-store")
-  const body = (await response.json()) as { jobs: { key: string; state: string }[] }
-  expect(body.jobs).toHaveLength(3)
+  const body = (await response.json()) as { ref: string; jobs: { key: string; state: string; flow: string }[] }
+  expect(body.ref).toBe("aivara-se/dispatch#212")
+  expect(body.jobs).toHaveLength(1)
+  expect(body.jobs[0]?.flow).toBe("review")
   expect(body.jobs[0]?.state).toBe("blocked")
 })
 
-test("an unknown flow's jobs are 404", async () => {
-  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/nope`)
-  expect(response.status).toBe(404)
+test("a flow with no jobs is not read", async () => {
+  emptyReads = 0
+  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/212`)
+  expect(response.status).toBe(200)
+  expect(emptyReads).toBe(0)
+})
+
+test("a pull request with no job is an empty list, not an error", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/999`)
+  expect(response.status).toBe(200)
+  const body = (await response.json()) as { jobs: unknown[] }
+  expect(body.jobs).toHaveLength(0)
+})
+
+test("a number that is not one is a 400", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/jobs/aivara-se/dispatch/latest`)
+  expect(response.status).toBe(400)
 })
 
 test("a flow with no jobs says so", async () => {

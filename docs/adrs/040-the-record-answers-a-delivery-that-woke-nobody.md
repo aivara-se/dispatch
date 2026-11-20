@@ -8,9 +8,10 @@
 
 ## Decision
 
-- Every delivery the service parses for a served repository gets one row, with a `decision` of `started`, `ended` or `ignored`, and an `ignored` row carries a `reason` from a closed set: `no-flow`, `unheld-login`, `team-review`.
+- Every delivery the service parses for a served repository gets one row, with a `decision` of `started`, `ended` or `ignored`.
+- `decision` names what the delivery changed; `reason` names what it could not do, from a closed set: `no-flow`, `unheld-login`, `team-review`, `already-started`. An `ignored` row always carries one. A `started` row carries `unheld-login` when a login it was asked for is no agent's, and carries none otherwise.
+- `started` when it created at least one job, `ended` when it ended one; a delivery that reaches its flow and finds the job already there has changed nothing, so it is `ignored` with the reason `already-started`. Its job's own start time is not the column's answer.
 - The row is written once, at the point the service stops considering that delivery, and it is the dedupe claim. So no row still means the service did not finish, and redelivering every failed delivery stays safe.
-- `decision` names what the delivery changed and `reason` names why it changed nothing. `started` when it created at least one job, `ended` when it ended one; a delivery that reaches its flow and finds the job already there has changed nothing, so it is `ignored` with the reason `already-started`. Its job's own start time is not the column's answer.
 - A delivery that names no pull request, or a repository the service does not serve, keeps no row: the allowlist and GitHub's own delivery list answer those, and the App's install scope would otherwise fill the record with other repositories' traffic.
 - A `started` row counts the jobs the delivery started, so one delivery that wakes two reviewers reads one row with `2` beside two job rows.
 - The reason names the service's own finding, never an agent's text.
@@ -21,4 +22,5 @@
 - Pruning is a later policy and needs no schema: `received_at` is its only input, and a pruned row un-claims its delivery. That is safe because a job is created once per flow, pull request and agent, so a re-driven wake of a pruned delivery creates nothing twice. The age must exceed the window in which GitHub still redelivers a failed delivery, and is the operator's number.
 - An ignored delivery is claimed, so a redelivery of it is refused. When a configuration change would make it act, the operator requests the review again.
 - `038`'s "a login no agent holds ... appends no line" is retired; its silence still wakes nobody, and it now says why.
+- A delivery that names a held login and an unheld one is `started` with the reason `unheld-login`, so the row names the class and not the login: the pull request's reviewer list is where the login reads.
 - An unserved repository reads only in GitHub's delivery list, which the service does not have a credential to read.

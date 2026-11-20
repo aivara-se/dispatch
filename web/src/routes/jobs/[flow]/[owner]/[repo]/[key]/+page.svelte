@@ -3,6 +3,7 @@
   import Icon from '$lib/Icon.svelte'
   import type { Action, Task } from '$lib/types'
   import { pick } from '$lib/selection'
+  import { toolCalls } from '$lib/tools'
 
   let { data } = $props()
 
@@ -12,6 +13,7 @@
   let picked = $state<{ id: string; n: number } | null>(null)
   let current = $derived(pick(picked, id, open))
   let task = $derived(job.tasks.find((item) => item.n === current))
+  let tools = $derived(toolCalls(task?.tools))
 
   const faces = ['meme', 'momo', 'mama', 'mimi']
   const agent = (item: Task) => item.actions.find((action) => action.type === 'prompt' && action.agent)?.agent ?? ''
@@ -89,6 +91,17 @@
           {/if}
         </article>
       {/each}
+      {#if tools.total > 0}
+        <div class="act tools">
+          <div class="ah"><span class="at">tool calls</span><span class="ax">{tools.total}</span></div>
+          <ul class="tl">
+            {#each tools.calls as call}
+              <li><span class="tn">{call.name}</span>{#if call.detail}<span class="td">{call.detail}</span>{/if}</li>
+            {/each}
+            {#if tools.more > 0}<li class="more">+{tools.more} more</li>{/if}
+          </ul>
+        </div>
+      {/if}
     </div>
   </aside>
 </div>

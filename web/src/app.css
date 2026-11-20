@@ -445,6 +445,34 @@ h1 {
 .act[data-exit="skip"] {
   opacity: 0.6;
 }
+.act.tools .tl {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font: 11px/1.7 var(--mono);
+}
+.act.tools .tl li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+.act.tools .tl .tn {
+  color: var(--ink);
+  white-space: nowrap;
+}
+.act.tools .tl .td {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act.tools .tl .more {
+  color: var(--muted);
+}
 
 @media (max-width: 1240px) {
   .shell {

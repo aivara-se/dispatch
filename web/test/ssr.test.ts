@@ -47,7 +47,10 @@ const detail = {
       ],
       pc: {},
       evidence: {},
-      tools: [],
+      tools: [
+        { id: "call_1", type: "function", function: { name: "read_file", arguments: '{"path":"internal/runner/runner.go"}' } },
+        { id: "call_2", type: "function", function: { name: "grep", arguments: '{"pattern":"BeginTask"}' } },
+      ],
     },
   ],
 }
@@ -117,6 +120,14 @@ test("the server renders the record before hydration", async () => {
   expect(html).toContain("01:05")
   expect(html).toContain("skipped")
   expect(html).toContain("the label write failed")
+})
+
+test("a task shows the tool calls it made", async () => {
+  const html = await (await fetch(`http://127.0.0.1:${port}/jobs/review/aivara-se/dispatch/212`)).text()
+  expect(html).toContain("tool calls")
+  expect(html).toContain("read_file")
+  expect(html).toContain("internal/runner/runner.go")
+  expect(html).toContain("grep")
 })
 
 test("a blocked job opens on its failing task", async () => {

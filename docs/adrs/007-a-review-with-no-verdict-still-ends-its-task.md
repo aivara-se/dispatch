@@ -13,9 +13,9 @@ The flow asks the reviewer for a verdict, and a review that only comments is a l
 - A review flow names it as the branch for a review the two verdicts do not cover.
 - A `next` names it after `pr.approved` and `pr.rejected`, and the loader refuses a map that does not: an approval holds `pr.reviewed` too, so a map that reaches it first ends every approved review without merging.
 
-## What this overrides
+## What this amends
 
-`002`'s "A `next` key is one of seven conditions" gains an eighth, `pr.reviewed`. Its "A comment and a pending review leave the last verdict standing" keeps its meaning, and the branch above stands beside it: the comment leaves the last verdict standing and is itself a condition that ends the task. `002`'s "`_start_` reads its keys on each delivery, and names only what a delivery proves" does not gain the key, so a `_start_.next` naming `pr.reviewed` fails the load.
+This amends `002`:9 — "A `next` key is one of seven conditions" — which gains an eighth, `pr.reviewed`. `002`:10, "A comment and a pending review leave the last verdict standing", keeps its meaning, and the branch above stands beside it: the comment leaves the last verdict standing and is itself a condition that ends the task. `002`:11 — "`_start_` reads its keys on each delivery, and names only what a delivery proves" — does not gain the key, so a `_start_.next` naming `pr.reviewed` fails the load.
 
 ## Consequences
 

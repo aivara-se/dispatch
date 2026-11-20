@@ -18,27 +18,43 @@ import (
 
 // The closed condition set a flow may name.
 const (
-	ConditionCreated  = "pr.created"
-	ConditionApproved = "pr.approved"
-	ConditionRejected = "pr.rejected"
-	ConditionUpdated  = "pr.updated"
-	ConditionMerged   = "pr.merged"
+	ConditionCreated         = "pr.created"
+	ConditionApproved        = "pr.approved"
+	ConditionRejected        = "pr.rejected"
+	ConditionUpdated         = "pr.updated"
+	ConditionMerged          = "pr.merged"
+	ConditionReviewRequested = "pr.review_requested"
+	ConditionAssigned        = "pr.assigned"
 )
 
+// PlaceholderAgent stands in a flow's key or a prompt action's agent for the
+// agent the delivery named.
+const PlaceholderAgent = "{agent}"
+
 var conditions = map[string]bool{
-	ConditionCreated:  true,
-	ConditionApproved: true,
-	ConditionRejected: true,
-	ConditionUpdated:  true,
-	ConditionMerged:   true,
+	ConditionCreated:         true,
+	ConditionApproved:        true,
+	ConditionRejected:        true,
+	ConditionUpdated:         true,
+	ConditionMerged:          true,
+	ConditionReviewRequested: true,
+	ConditionAssigned:        true,
 }
 
 // starts are the conditions a delivery proves, so they are the only keys
 // _start_.next may name. pr.updated and pr.merged are read after a task.
 var starts = map[string]bool{
-	ConditionCreated:  true,
-	ConditionApproved: true,
-	ConditionRejected: true,
+	ConditionCreated:         true,
+	ConditionApproved:        true,
+	ConditionRejected:        true,
+	ConditionReviewRequested: true,
+	ConditionAssigned:        true,
+}
+
+// PerLogin reports whether a start condition starts one job per login an
+// agent holds, rather than one job per pull request.
+func PerLogin(key string) bool {
+	return key == ConditionReviewRequested || key == ConditionAssigned
 }
 
 // ValidCondition reports whether name is one of the five conditions.
@@ -61,9 +77,20 @@ func (e *Error) Error() string {
 	return e.File + ": " + e.Key + ": " + e.Msg
 }
 
-// Agent is one configured Hermes profile.
+// Agent is one configured Hermes profile and the GitHub login that wakes it.
 type Agent struct {
 	Profile string `json:"profile"`
+	Login   string `json:"login"`
+}
+
+// AgentFor returns the agent a login names.
+func AgentFor(agents map[string]Agent, login string) (string, bool) {
+	for name, agent := range agents {
+		if strings.EqualFold(agent.Login, login) {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // Config is dispatch.json: the repositories served, the Hermes binary, the
@@ -204,13 +231,24 @@ func (c *Config) validate(file string) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	held := make(map[string]string, len(names))
 	for _, name := range names {
 		if name == "" {
 			return keyError(file, "agents", "empty agent name")
 		}
-		if c.Agents[name].Profile == "" {
+		agent := c.Agents[name]
+		if agent.Profile == "" {
 			return keyError(file, "agents."+name+".profile", "required")
 		}
+		if agent.Login == "" {
+			return keyError(file, "agents."+name+".login", "required")
+		}
+		lower := strings.ToLower(agent.Login)
+		if other, ok := held[lower]; ok {
+			return keyError(file, "agents."+name+".login",
+				fmt.Sprintf("duplicate login, also held by %q", other))
+		}
+		held[lower] = name
 	}
 	for i, repo := range c.Repos {
 		owner, name, ok := strings.Cut(repo, "/")
@@ -274,10 +312,20 @@ func loadFlow(path string, cfg *Config) (Flow, error) {
 	if err := validateNext(path, "tasks._start_.next", flow.Start, known); err != nil {
 		return Flow{}, err
 	}
+	perLogin := false
 	for _, c := range flow.Start {
 		if !starts[c.Key] {
 			return Flow{}, keyError(path, "tasks._start_.next."+c.Key, "no delivery proves this condition")
 		}
+		perLogin = perLogin || PerLogin(c.Key)
+	}
+	// Two agents' jobs must not share a session, and the session is the key.
+	namesAgent := strings.Contains(head.Key, PlaceholderAgent)
+	if perLogin && !namesAgent {
+		return Flow{}, keyError(path, "key", "must contain "+PlaceholderAgent+": its start names a login")
+	}
+	if namesAgent && !perLogin {
+		return Flow{}, keyError(path, "key", PlaceholderAgent+" names no login in tasks._start_.next")
 	}
 	for _, name := range names {
 		var tf struct {
@@ -298,8 +346,13 @@ func loadFlow(path string, cfg *Config) (Flow, error) {
 			return Flow{}, keyError(path, "tasks."+name+".limit.time", "must be at least 1")
 		}
 		for i, action := range tf.Actions {
-			if err := action.validate(path, "tasks."+name+fmt.Sprintf(".actions[%d]", i), cfg); err != nil {
+			key := "tasks." + name + fmt.Sprintf(".actions[%d]", i)
+			if err := action.validate(path, key, cfg); err != nil {
 				return Flow{}, err
+			}
+			if action.Agent == PlaceholderAgent && !perLogin {
+				return Flow{}, keyError(path, key+".agent",
+					PlaceholderAgent+" names no login in tasks._start_.next")
 			}
 		}
 		if err := validateNext(path, "tasks."+name+".next", tf.Next, known); err != nil {
@@ -316,7 +369,7 @@ func (a Action) validate(path, key string, cfg *Config) error {
 		if a.Agent == "" {
 			return keyError(path, key+".agent", "required")
 		}
-		if _, ok := cfg.Agents[a.Agent]; !ok {
+		if _, ok := cfg.Agents[a.Agent]; !ok && a.Agent != PlaceholderAgent {
 			return keyError(path, key+".agent", fmt.Sprintf("unknown agent %q", a.Agent))
 		}
 		if a.Text == "" {

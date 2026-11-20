@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +56,7 @@ func TestParse(t *testing.T) {
 	}
 	want := webhook.Event{ID: "d1", Kind: webhook.KindPullRequest, Action: "opened", Owner: "aivara-se", Repo: "dispatch", Number: 212,
 		Title: "evict counts", Link: "https://github.com/aivara-se/dispatch/pull/212"}
-	if event != want {
+	if !reflect.DeepEqual(event, want) {
 		t.Fatalf("event = %+v", event)
 	}
 
@@ -249,4 +250,66 @@ func sign(key, body []byte) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestParseReadsTheNamedLogin(t *testing.T) {
+	header := http.Header{}
+	header.Set("X-GitHub-Event", webhook.KindPullRequest)
+	header.Set("X-GitHub-Delivery", "d1")
+
+	cases := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "review requested",
+			body: `{"action":"review_requested","repository":{"full_name":"aivara-se/dispatch"},
+				"pull_request":{"number":212},
+				"requested_reviewer":{"login":"thani-sh-meme"}}`,
+			want: []string{"thani-sh-meme"},
+		},
+		{
+			name: "review requested from a team",
+			body: `{"action":"review_requested","repository":{"full_name":"aivara-se/dispatch"},
+				"pull_request":{"number":212},
+				"requested_team":{"name":"reviewers"}}`,
+			want: nil,
+		},
+		{
+			name: "assigned",
+			body: `{"action":"assigned","repository":{"full_name":"aivara-se/dispatch"},
+				"pull_request":{"number":212},
+				"assignee":{"login":"thani-sh-momo"}}`,
+			want: []string{"thani-sh-momo"},
+		},
+		{
+			name: "opened with reviewers",
+			body: `{"action":"opened","repository":{"full_name":"aivara-se/dispatch"},
+				"pull_request":{"number":212,"requested_reviewers":[{"login":"thani-sh-meme"},{"login":"thani-sh-momo"}]}}`,
+			want: []string{"thani-sh-meme", "thani-sh-momo"},
+		},
+		{
+			name: "opened without reviewers",
+			body: `{"action":"opened","repository":{"full_name":"aivara-se/dispatch"},
+				"pull_request":{"number":212,"requested_reviewers":[]}}`,
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event, err := webhook.Parse(header, []byte(tc.body))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if len(event.Logins) != len(tc.want) {
+				t.Fatalf("logins = %v, want %v", event.Logins, tc.want)
+			}
+			for i, login := range tc.want {
+				if event.Logins[i] != login {
+					t.Fatalf("logins = %v, want %v", event.Logins, tc.want)
+				}
+			}
+		})
+	}
 }

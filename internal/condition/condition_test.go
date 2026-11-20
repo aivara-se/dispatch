@@ -35,6 +35,8 @@ func TestConditions(t *testing.T) {
 		want  bool
 	}{
 		{key: "pr.created", want: false},
+		{key: "pr.review_requested", want: false},
+		{key: "pr.assigned", want: false},
 		{key: "pr.approved", want: false},
 		{key: "pr.rejected", want: true},
 		{key: "pr.updated", start: "s0", want: true},

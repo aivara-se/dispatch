@@ -44,6 +44,9 @@ type Event struct {
 	Review string
 	Title  string
 	Link   string
+	// Logins are the users a review request or an assignment names, in the
+	// payload's order.
+	Logins []string
 }
 
 // Verify reports whether signature is the HMAC-SHA256 of body under secret.
@@ -79,14 +82,23 @@ func Parse(header http.Header, body []byte) (Event, error) {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
 		PullRequest *struct {
-			Number  int    `json:"number"`
-			Merged  bool   `json:"merged"`
-			Title   string `json:"title"`
-			HTMLURL string `json:"html_url"`
+			Number             int    `json:"number"`
+			Merged             bool   `json:"merged"`
+			Title              string `json:"title"`
+			HTMLURL            string `json:"html_url"`
+			RequestedReviewers []struct {
+				Login string `json:"login"`
+			} `json:"requested_reviewers"`
 		} `json:"pull_request"`
 		Review *struct {
 			State string `json:"state"`
 		} `json:"review"`
+		RequestedReviewer *struct {
+			Login string `json:"login"`
+		} `json:"requested_reviewer"`
+		Assignee *struct {
+			Login string `json:"login"`
+		} `json:"assignee"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return Event{}, err
@@ -111,6 +123,22 @@ func Parse(header http.Header, body []byte) (Event, error) {
 	}
 	if payload.Review != nil {
 		event.Review = payload.Review.State
+	}
+	switch payload.Action {
+	case "review_requested":
+		if payload.RequestedReviewer != nil && payload.RequestedReviewer.Login != "" {
+			event.Logins = []string{payload.RequestedReviewer.Login}
+		}
+	case "assigned":
+		if payload.Assignee != nil && payload.Assignee.Login != "" {
+			event.Logins = []string{payload.Assignee.Login}
+		}
+	case "opened":
+		for _, reviewer := range payload.PullRequest.RequestedReviewers {
+			if reviewer.Login != "" {
+				event.Logins = append(event.Logins, reviewer.Login)
+			}
+		}
 	}
 	return event, nil
 }

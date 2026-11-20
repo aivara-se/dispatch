@@ -1,0 +1,13 @@
+{
+  "key": "{n}-{agent}",
+  "tasks": {
+    "_start_": { "next": { "pr.review_requested": "review" } },
+    "review": {
+      "actions": [
+        { "type": "prompt", "agent": "{agent}", "text": "Review {pr.url}." }
+      ],
+      "limit": { "turn": 1, "time": 60 },
+      "next": { "pr.approved": "_done_" }
+    }
+  }
+}

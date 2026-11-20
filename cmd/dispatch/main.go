@@ -87,7 +87,7 @@ func run(args []string) error {
 	}
 	jobRunner := runner.New(store, flows, *configDir, profiles,
 		hermes.New(cfg.Hermes), condition.New(app), app, hub.Publish)
-	handler := webhook.NewHandler([]byte(secret), engine.New(store, cfg.Repos, flows, app, hub.Publish, jobRunner).Deliver)
+	handler := webhook.NewHandler([]byte(secret), engine.New(store, cfg.Repos, flows, cfg.Agents, app, hub.Publish, jobRunner).Deliver)
 
 	webhookServer := &http.Server{
 		Addr:              cfg.Listen,

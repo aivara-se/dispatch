@@ -11,10 +11,11 @@ The flow asks the reviewer for a verdict, and a review that only comments is a l
 - A condition `pr.reviewed` joins the set: the head carries at least one submitted review — approved, changes requested or commented — and a pending or a dismissed review does not count.
 - It is read after a task, never on a delivery, so it starts no job.
 - A review flow names it as the branch for a review the two verdicts do not cover.
+- A `next` names it after `pr.approved` and `pr.rejected`, and the loader refuses a map that does not: an approval holds `pr.reviewed` too, so a map that reaches it first ends every approved review without merging.
 
 ## Consequences
 
 - A reviewer who comments ends the task `done` instead of failing the job, and a merge flow still waits for `pr.approved`.
 - The condition is pull request-level: a job can end on another reviewer's review of the same head, which is how `pr.approved` already behaves (`038`). The job's evidence names the head and the review states, not the reviewer.
-- Two of the three blocked rows on the first production record would read `done` under this condition.
+- Two of the three blocked rows on the first production record keep `blocked` and `failed`: the condition did not exist when they stopped, and a record of a stop is not rewritten. Their alert, `no condition holds`, is the record of the branch the flow lacked.
 - `029`'s closed set gains a key, and `035`'s list of start conditions does not: `pr.reviewed` is read after a task, so a `_start_.next` naming it fails the load.

@@ -8,13 +8,13 @@ The rate follows the work: 60 tasks in 21.7 hours is 66.4 a day, so 1.25 MB a da
 
 The record is the answer to a question about the past — a job's state, the condition that decided a task, the evidence behind it, and what the run did inside it. A pruning rule trades that answer for disk, and the trade is the wrong way round at half a gigabyte a year.
 
-`tools` is that answer's only witness to a false report: an agent that says it ran the tests and made no call is caught by what it did not call. No surface shows it today — `web/src/lib/types.ts` declares the field and no page renders it, and the CLI prints jobs and not calls — so 88% of the file is kept for a reader that does not exist yet.
+`tools` is that answer's only witness to a false report: an agent that says it ran the tests and made no call is caught by what it did not call. The client reads it — a task's panel prints the call count and each call — while the CLI prints jobs and not calls, so 88% of the file's bytes answer one reader and no terminal.
 
 ## Decision
 
 - No age and no size deletes a row. A job, its tasks and their actions stay for the life of the record.
 - Growth is a function of work and not of retention. `deliveries` is not the table that matters; a task costs 83 times a delivery at the 18,852-byte mean all 60 rows give.
-- `tools` stays. It is evidence, and the missing surface is a defect in the client, not a licence to drop the field.
+- `tools` stays. It is evidence, and a surface that hides a field is a defect in the surface, not a licence to drop the field.
 - If the rate ever needs a bound, the lever is the payload and not the rows: compress `tasks.tools` on write and leave every row in place. It is taken when a copy of the record no longer fits the free space beside the live file, which at this rate is years away.
 - The record's own file stays one file: `journal_mode` is `delete`, so a stopped service leaves nothing beside it, and its swap copy is a `cp`.
 
@@ -24,5 +24,5 @@ The record is the answer to a question about the past — a job's state, the con
 - Every reader is unchanged: the client, the CLI and the API read the same shape, and `tools` stays JSON.
 - A third of the tasks record no tool call, so the field costs nothing on those rows and the file's size follows the runs that do call tools.
 - Compressing `tools` is the recorded lever and it is not taken here. When it is, `tools` stops reading with a plain `sqlite3` and reads through the API and the CLI.
-- The client showing a task's tool calls is owed, and it is a client change: until it lands, the record keeps a field no page displays.
+- The client's task panel shows the calls and the CLI does not, so the same task reads differently in the two readers.
 - The four indexes the unique constraints create stay the only ones; nothing is added for retention.

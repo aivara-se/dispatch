@@ -97,6 +97,8 @@ Status uses the four accents: `{colors.accent}`, `{colors.agentGold}`, `{colors.
 
 Space Grotesk sets names and the wordmark; Inter sets prose and labels; the system mono sets code and figures of reference. The families and weights are the `typography` tokens; a size outside the set is set on its element. Figures use tabular numerals.
 
+A task's tool calls are mono at 11px, one call per line, the name in ink and its arguments in the muted fill. The block shows twelve calls and then `+N more`; one call's arguments clip at 120 characters.
+
 ## Layout
 
 Spacing starts from the `spacing` scale; a surface's own padding is measured on it. One gutter separates groups; density comes from type and alignment, not from dividers. The surface keeps one reading column beside one list.

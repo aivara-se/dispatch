@@ -43,7 +43,7 @@ var ErrNotFound = errors.New("not found")
 
 // SchemaVersion is the record's shape. A process whose own version is older
 // than the file's stops at boot instead of reading a shape it does not know.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // Store is the open record.
 type Store struct {
@@ -490,6 +490,13 @@ func (s *Store) migrate() error {
 		}
 	}
 	if err := s.rebuildJobs(); err != nil {
+		return err
+	}
+	// A merged close ends its job passed (docs/adrs/036). Rows written before
+	// the close path wrote a verdict carry done and pending together: a pair
+	// no writer produces now, and one a reader cannot act on.
+	if _, err := s.db.Exec(`UPDATE jobs SET verdict = ? WHERE state = ? AND verdict = ?`,
+		VerdictPassed, StateDone, VerdictPending); err != nil {
 		return err
 	}
 	return s.setVersion(SchemaVersion)

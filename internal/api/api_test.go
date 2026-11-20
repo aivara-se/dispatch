@@ -66,6 +66,9 @@ func TestRoutes(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339, card["cause"].(string)); err != nil {
 		t.Fatalf("cause = %v", card["cause"])
 	}
+	if _, err := time.Parse(time.RFC3339, card["started"].(string)); err != nil {
+		t.Fatalf("started = %v", card["started"])
+	}
 
 	detail := decode(t, get(t, handler, "/v1/flows/review/jobs/aivara-se/dispatch/212"))
 	tasks := detail["tasks"].([]any)

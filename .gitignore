@@ -1,2 +1,33 @@
+# dependencies
+node_modules
+
+# output
+out
+dist
+*.tgz
 /dispatch
-/node_modules
+web/.svelte-kit
+web/build
+
+# coverage
+coverage
+*.lcov
+
+# logs
+logs
+*.log
+
+# environment
+.env
+.env.*
+!.env.example
+
+# caches
+.cache
+*.tsbuildinfo
+
+# editors
+.idea
+
+# Finder
+.DS_Store

@@ -1,8 +1,8 @@
-# 002 The engine reads a closed condition set
+# 002 - The engine reads a closed condition set
 
 ## Context
 
-A flow names what must hold before a job advances. A free expression would name something the engine cannot read, or ask it to trust the agent.
+A flow names what must hold before a job advances. A free expression would name something the engine cannot read, or ask it to trust the agent. The set must be small enough to prove and closed enough that a new name is a decision rather than a configuration detail.
 
 ## Decision
 
@@ -16,4 +16,4 @@ A flow names what must hold before a job advances. A free expression would name 
 
 ## Consequences
 
-Adding a condition is a decision, not a configuration change. A flow cannot express a condition the engine does not implement, and the engine stays the only reader of outcomes.
+Adding a condition is a decision, not a configuration change. A flow cannot express a condition the engine does not implement, and the engine stays the only reader of outcomes. A delivery alone proves five conditions; the other two need a read after the task ends.

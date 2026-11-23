@@ -2,7 +2,7 @@
 
 ## Context
 
-Dispatch is the process engine for an agent fleet. A few choices decide its shape and are expensive to reverse: what a job's root is, how a step is proved, which conditions the engine can read, what it may write, and how an agent is started. A later reader must find them, and their status must not depend on anyone's memory.
+A repository created from this template starts with its documents and no history. The first decision every repository makes is how it records the rest, and that record must outlive the agent that wrote it: the choice, what it cost, and what a later change overrode.
 
 ## Decision
 

@@ -6,7 +6,11 @@
     },
     "merge": {
       "actions": [
-        { "type": "prompt", "agent": "meme", "text": "Merge pull request {pr.url} through the queue." }
+        {
+          "type": "prompt",
+          "agent": "meme",
+          "text": "Merge pull request {pr.url} through the queue."
+        }
       ],
       "limit": { "turn": 1, "time": 1800 },
       "next": { "pr.merged": "_done_" }

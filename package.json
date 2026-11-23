@@ -2,10 +2,13 @@
   "name": "dispatch",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.4",
   "scripts": {
     "dispatch": "bun run cli/dispatch.ts",
     "check": "bun x tsc -p tsconfig.json --noEmit",
-    "test": "bun test cli"
+    "test": "bun test cli",
+    "format": "bun fmt --no-script",
+    "format:check": "bun fmt --no-script --check"
   },
   "bin": {
     "dispatch": "cli/dispatch.ts"

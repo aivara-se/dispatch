@@ -1,0 +1,11 @@
+node_modules
+web/node_modules
+.svelte-kit
+web/.svelte-kit
+build
+web/build
+dist
+bun.lock
+docs/DESIGN.md
+docs/adrs
+docs/web-client-mock.html

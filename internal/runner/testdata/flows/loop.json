@@ -3,9 +3,7 @@
   "tasks": {
     "_start_": { "next": { "pr.created": "run" } },
     "run": {
-      "actions": [
-        { "type": "script", "path": "check.sh", "args": [] }
-      ],
+      "actions": [{ "type": "script", "path": "check.sh", "args": [] }],
       "limit": { "turn": 2, "time": 2 },
       "next": { "pr.updated": "run" }
     }

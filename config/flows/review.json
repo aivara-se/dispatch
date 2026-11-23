@@ -6,7 +6,11 @@
     },
     "review": {
       "actions": [
-        { "type": "prompt", "agent": "{agent}", "text": "Review pull request {pr.url}. Read the diff and the description, then leave one review, approved or with requested changes." }
+        {
+          "type": "prompt",
+          "agent": "{agent}",
+          "text": "Review pull request {pr.url}. Read the diff and the description, then leave one review, approved or with requested changes."
+        }
       ],
       "limit": { "turn": 10, "time": 1800 },
       "next": { "pr.approved": "_done_", "pr.rejected": "_done_" }

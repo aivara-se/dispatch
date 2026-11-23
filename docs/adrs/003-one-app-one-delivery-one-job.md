@@ -1,8 +1,10 @@
-# 003 One App, one delivery, one job per agent
+# 003 - One App, one delivery, one job per agent
 
 ## Context
 
 GitHub posts deliveries. The engine reads pull requests and reviews and writes labels, while agents write code, reviews and merges under their own identities. The engine needs a credential that cannot write the change, and a rule that turns a delivery into jobs without asking an agent.
+
+A delivery can name several agents, and two deliveries can arrive while a job runs. One job per agent keeps the effects separate, and a key that carries the agent keeps two jobs from sharing an address.
 
 ## Decision
 

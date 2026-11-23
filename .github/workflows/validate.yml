@@ -2,22 +2,31 @@ name: validate
 
 on:
   pull_request:
-  push:
-    branches: [main, next]
   merge_group:
 
 jobs:
+  validate-agents:
+    uses: aivara-se/.github/.github/workflows/validate-agents.yml@main
+
+  validate-docs:
+    uses: aivara-se/.github/.github/workflows/validate-docs.yml@main
+
+  validate-config:
+    uses: aivara-se/.github/.github/workflows/validate-config.yml@main
+    secrets:
+      ORG_READ_TOKEN: ${{ secrets.ORG_READ_TOKEN }}
+
   validate:
     # The ruleset requires `validate` alone, and a skipped job satisfies it.
-    # So this job runs even when a document job fails, and fails with it.
-    needs: [docs, agents]
+    # So this job runs even when an organisation job fails, and fails with it.
+    needs: [validate-agents, validate-docs, validate-config]
     if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Require the document jobs
-        if: needs.docs.result != 'success' || needs.agents.result != 'success'
+      - name: Require the organisation jobs
+        if: needs.validate-agents.result != 'success' || needs.validate-docs.result != 'success' || needs.validate-config.result != 'success'
         run: exit 1
 
       - uses: actions/checkout@v7
@@ -42,6 +51,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Check formatting
+        run: bun fmt --no-script --check .
+
       - name: Type check the CLI
         run: bun x tsc -p tsconfig.json --noEmit
 
@@ -59,17 +71,3 @@ jobs:
       - name: Test the web client
         working-directory: web
         run: bun test
-
-  # The document standard, from the one checker in aivara-se/.github. This
-  # repository carries no copy of it.
-  docs:
-    permissions:
-      contents: read
-    uses: aivara-se/.github/.github/workflows/validate-docs.yml@main
-
-  # The organisation's entry file, from the same standard. A copy that drifts
-  # fails here.
-  agents:
-    permissions:
-      contents: read
-    uses: aivara-se/.github/.github/workflows/validate-agents.yml@main

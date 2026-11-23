@@ -1,8 +1,10 @@
-# 001 The engine proves each task on its pull request
+# 001 - The engine proves each task on its pull request
 
 ## Context
 
-Work arrives as deliveries about pull requests, and the change and its proof live there. Without one root, tasks and verdicts scatter; without a proof, a report of success is all there is.
+Work arrives as deliveries about pull requests, and the change and its proof live there. Without one root, tasks and verdicts scatter across runs; without a proof, a report of success is all there is and no reader can tell it from work that happened.
+
+The engine cannot trust an agent's word, and it must not become a second author of the change. Every advance needs an effect it can read on GitHub, and every read needs to survive in the record.
 
 ## Decision
 
@@ -15,4 +17,4 @@ Work arrives as deliveries about pull requests, and the change and its proof liv
 
 ## Consequences
 
-Every task needs an effect the engine can read, so work is limited to what GitHub can show. The engine can label but not write code, review or merge, so a missing permission is a bug and not an accident. Parallel tasks need a later decision.
+Every task needs an effect the engine can read, so work is limited to what GitHub can show. The engine can label but not write code, review or merge, so a missing permission is a bug and not an accident. Parallel tasks need a later decision, and a job that stops cannot resume from its own word.
